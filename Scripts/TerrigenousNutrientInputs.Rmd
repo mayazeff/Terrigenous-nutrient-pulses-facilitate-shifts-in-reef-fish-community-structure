@@ -434,61 +434,69 @@ nitrogen_contrast <- emmeans(turbinaria_model, ~ Environment) %>%
 
 ### Table S1.
 ```{r S1Table}
+# Get CIs
+salinity_contrasts_twosided <- emmeans(salinity_model, ~ Tide | Environment) %>%
+  pairs(adjust = "tukey") %>%
+  summary(infer = TRUE)
 
-# Get planned contrasts results
-salinity_contrasts_df <- as.data.frame(salinity_contrasts)
+# Get p-values 
+salinity_contrasts_onesided <- emmeans(salinity_model, ~ Tide | Environment) %>%
+  pairs(adjust = "tukey", side = ">") %>%
+  summary()
 
-# Check if there is 'ratio' or 'estimate' column
-if("estimate" %in% names(salinity_contrasts_df)) {
-  # Convert log-scale estimates to ratios
-  salinity_contrasts_df$ratio <- exp(salinity_contrasts_df$estimate)
-}
+# Combine CIs and p values
+salinity_contrasts_df <- as.data.frame(salinity_contrasts_twosided) %>%
+  mutate(p.value = as.data.frame(salinity_contrasts_onesided)$p.value)
 
-# Format salinity contrasts table
+# For GLMMs with glmmTMB, z-ratios have asymptotic df (effectively infinite)
+
 table_S1 <- salinity_contrasts_df %>%
   mutate(
-    # Format numeric columns to appropriate decimal places
-    estimate = sprintf("%.3f", estimate),
-    ratio = sprintf("%.3f", ratio),
-    SE = sprintf("%.3f", SE),
-    z.ratio = sprintf("%.3f", z.ratio),
-    # Format p-values with appropriate notation
-    p.value = case_when(
+    # Back-transform to ratio scale
+    ratio = exp(estimate),
+    ratio_lower = exp(asymp.LCL),
+    ratio_upper = exp(asymp.UCL),
+    # Format columns
+    ratio_formatted = sprintf("%.3f", ratio),
+    CI_formatted = sprintf("[%.3f, %.3f]", ratio_lower, ratio_upper),
+    SE_formatted = sprintf("%.3f", SE),
+    z_formatted = sprintf("%.2f", z.ratio),
+    df_note = "∞",  # Asymptotic
+    p_formatted = case_when(
       p.value < 0.001 ~ "< 0.001",
-      p.value < 0.01 ~ sprintf("%.3f", p.value),
-      p.value < 0.05 ~ sprintf("%.3f", p.value),
       TRUE ~ sprintf("%.3f", p.value)
     )
   ) %>%
-  select(Environment, contrast, estimate, ratio, SE, z.ratio, p.value) %>%
+  select(Environment, contrast, ratio_formatted, CI_formatted, SE_formatted, 
+         z_formatted, df_note, p_formatted) %>%
   rename(
     "Environment" = Environment,
     "Contrast" = contrast,
-    "Log Estimate" = estimate,
-    "Ratio (High/Low)" = ratio,
-    "Std. Error" = SE,
-    "z-ratio" = z.ratio,
-    "p-value" = p.value
+    "Ratio (High/Low)" = ratio_formatted,
+    "95% CI" = CI_formatted,
+    "SE" = SE_formatted,
+    "z" = z_formatted,
+    "df" = df_note,
+    "P" = p_formatted
   )
 
-# Add caption
-caption_S1 <- "Table S1. Planned contrasts testing tidal effects on salinity within each environment.\nGamma GLMM with log link. Ratios represent High Tide / Low Tide salinity. One-sided tests (High > Low)."
+caption_S1 <- paste0(
 
-# Create table with caption
+"Table S1. Planned contrasts testing tidal effects on salinity within each environment.\n",
+"Gamma GLMM with log link; random effects: Habitat/SamplingTime.\n",
+"Ratios represent High Tide / Low Tide salinity. One-sided tests (H₁: High > Low).\n",
+"df = ∞ indicates asymptotic z-distribution. Letters in Fig. 1E-F correspond to these contrasts."
+)
+
+# Create and save table
 table_S1_grob <- tableGrob(table_S1, theme = table_theme, rows = NULL)
-title_S1 <- textGrob(caption_S1, 
-                     x = .5, vjust = 0, y = -.5, 
-                     gp = gpar(fontsize = 10, fontface = "italic"))
-
-# Combine title and table
+title_S1 <- textGrob(caption_S1, x = 0.5, vjust = 0, y = -0.5, 
+                     gp = gpar(fontsize = 9, fontface = "italic"))
 final_S1 <- arrangeGrob(title_S1, table_S1_grob, 
-                        heights = unit.c(unit(2, "lines"), unit(1, "null")))
+                        heights = unit.c(unit(4, "lines"), unit(1, "null")))
 
-# Save Table S1
-png(here("Outputs", "TableS1.png"), 
-    width = 10, height = 4, 
-    units = "in", res = 300)
-grid.draw(final_S1)  
+png(here("Outputs", "TableS1_updated.png"), width = 10, height = 4, units = "in", res = 300)
+grid.draw(final_S1)
 dev.off()
 
 ```
@@ -497,60 +505,70 @@ dev.off()
 ### Table S2.
 ```{r S2Table}
 
-# Convert emmeans contrast results to data frame
-nitrogen_contrasts_df <- as.data.frame(nitrogen_contrast)
+# Get CIs
+nitrogen_contrast_twosided <- emmeans(turbinaria_model, ~ Environment) %>%
+  pairs() %>%
+  summary(infer = TRUE)
 
-# Calculate ratios from log estimates 
-if("estimate" %in% names(nitrogen_contrasts_df)) {
-  nitrogen_contrasts_df$ratio <- exp(nitrogen_contrasts_df$estimate)
-}
+# Get p values
+nitrogen_contrast_onesided <- emmeans(turbinaria_model, ~ Environment) %>%
+  pairs(side = "<") %>%
+  summary()
 
-# Format nitrogen contrasts table
-table_S2 <- nitrogen_contrasts_df %>%
+# Combine CIs and p values
+nitrogen_df <- as.data.frame(nitrogen_contrast_twosided) %>%
+  mutate(p.value = as.data.frame(nitrogen_contrast_onesided)$p.value)
+
+# For GLM, we get t-ratios with residual df
+# Extract residual df from model
+resid_df <- df.residual(turbinaria_model)
+
+
+table_S2 <- nitrogen_df %>%
   mutate(
-    # Format numeric columns
-    estimate = sprintf("%.3f", estimate),
-    ratio = sprintf("%.3f", ratio),
-    SE = sprintf("%.3f", SE),
-    t.ratio = sprintf("%.3f", t.ratio),
-    # Format p-values
-    p.value = case_when(
+    ratio = exp(estimate),
+    ratio_lower = exp(lower.CL),
+    ratio_upper = exp(upper.CL),
+    # Percent difference for effect size interpretation
+    percent_diff = sprintf("%.1f%%", (1/ratio - 1) * 100),
+    ratio_formatted = sprintf("%.3f", ratio),
+    CI_formatted = sprintf("[%.3f, %.3f]", ratio_lower, ratio_upper),
+    SE_formatted = sprintf("%.3f", SE),
+    t_formatted = sprintf("%.2f", t.ratio),
+    df_value = resid_df,
+    p_formatted = case_when(
       p.value < 0.001 ~ "< 0.001",
-      p.value < 0.01 ~ sprintf("%.3f", p.value),
-      p.value < 0.05 ~ sprintf("%.3f", p.value),
       TRUE ~ sprintf("%.3f", p.value)
     )
   ) %>%
-  select(contrast, estimate, ratio, SE, t.ratio, p.value) %>%
+  select(contrast, ratio_formatted, CI_formatted, percent_diff, SE_formatted, 
+         t_formatted, df_value, p_formatted) %>%
   rename(
     "Contrast" = contrast,
-    "Log Estimate" = estimate,
-    "Ratio (SGD/Ambient)" = ratio,
-    "Std. Error" = SE,
-    "t-ratio" = t.ratio,
-    "p-value" = p.value
+    "Ratio (Amb/SGD)" = ratio_formatted,
+    "95% CI" = CI_formatted,
+    "SGD Increase" = percent_diff,
+    "SE" = SE_formatted,
+    "t" = t_formatted,
+    "df" = df_value,
+    "P" = p_formatted
   )
 
-# Add caption
-caption_S2 <- "Table S2. Planned contrast testing effects of submarine groundwater discharge (SGD) on macroalgal nitrogen content (percent N).\nGamma GLM with log link. Ratios represent SGD Environment / Ambient Environment. One-sided test (SGD > Ambient)."
+caption_S2 <- paste0(
+"Table S2. Planned contrast testing SGD effects on Turbinaria ornata nitrogen content.\n",
+"Gamma GLM with log link. Ratio < 1 indicates SGD > Ambient.\n",
+"One-sided test (H₁: SGD > Ambient). Letters in Fig. 1G correspond to this contrast."
+)
 
-# Create table grob
 table_S2_grob <- tableGrob(table_S2, theme = table_theme, rows = NULL)
-title_S2 <- textGrob(caption_S2, 
-                     x = .5, vjust = 0, y = -.5, 
-                     gp = gpar(fontsize = 10, fontface = "italic"))
-
-# Combine title and table
+title_S2 <- textGrob(caption_S2, x = 0.5, vjust = 0, y = -0.5, 
+                     gp = gpar(fontsize = 9, fontface = "italic"))
 final_S2 <- arrangeGrob(title_S2, table_S2_grob, 
-                        heights = unit.c(unit(2, "lines"), unit(1, "null")))
+                        heights = unit.c(unit(3, "lines"), unit(1, "null")))
 
-# Save Table S2
-png(here("Outputs", "TableS2.png"), 
-    width = 8, height = 4, 
-    units = "in", res = 300)
-grid.draw(final_S2)  
+png(here("Outputs", "TableS2_updated.png"), width = 11, height = 3, units = "in", res = 300)
+grid.draw(final_S2)
 dev.off()
-
 ```
 
 
@@ -1045,9 +1063,9 @@ sgd_results_higher <- sgd_contrasts_all %>%
   as.data.frame() %>%
   filter(functional %in% c("Omnivore", "Herbivore", "Invertivore"))
 
-# For corallivores (expecting SGD < Ambient)
+# For corallivores (two-sided test - no directional hypothesis)
 sgd_results_coral <- sgd_contrasts_all %>%
-  summary(side = ">", adjust = "tukey") %>%
+  summary(adjust = "tukey") %>%
   as.data.frame() %>%
   filter(functional == "Corallivore")
 
@@ -1074,9 +1092,9 @@ tide_results_higher <- tide_contrasts_all %>%
   as.data.frame() %>%
   filter(functional %in% c("Omnivore", "Herbivore", "Invertivore"))
 
-# For corallivores (expecting SGD < Ambient)
+# For corallivores (two-sided test - no directional hypothesis)
 tide_results_coral <- tide_contrasts_all %>%
-  summary(side = ">", adjust = "tukey") %>%
+  summary(adjust = "tukey") %>%
   as.data.frame() %>%
   filter(functional == "Corallivore")
 
@@ -1091,7 +1109,7 @@ all_tide_contrasts <- bind_rows(
 
 # SGD vs Ambient at each tidal state
 # Get emmeans for environment comparisons at each tide separately
-emm_sgd_by_tide <- emmeans(mixed_model1, ~ Environment | Tide + functional)
+emm_sgd_by_tide <- emmeans(abundance_mixed_model, ~ Environment | Tide + functional)
 
 # Create contrasts
 sgd_by_tide_contrasts <- emm_sgd_by_tide %>%
@@ -1104,9 +1122,9 @@ sgd_by_tide_higher <- sgd_by_tide_contrasts %>%
   as.data.frame() %>%
   filter(functional %in% c("Omnivore", "Herbivore", "Invertivore"))
 
-# For corallivores (expecting SGD < Ambient)
+# For corallivores (two-sided test - no directional hypothesis)
 sgd_by_tide_coral <- sgd_by_tide_contrasts %>%
-  summary(side = ">", adjust = "tukey") %>%
+  summary(adjust = "tukey") %>%
   as.data.frame() %>%
   filter(functional == "Corallivore")
 
@@ -1119,7 +1137,7 @@ sgd_by_tide_all <- bind_rows(
 
 ```
 
-```{r fi2Cstats}
+```{r fig2Cstats}
 
 # # Fit a GLMM for species richness (count of genera per replicate)
 # richness_model <- glmmTMB(
@@ -1153,54 +1171,71 @@ richness_contrasts <- emm_richness %>%
 
 ```{r TableS3}
 
-# Format tidal contrasts table
-table_S3 <- all_tide_contrasts %>%
+# Re-run with confidence intervals
+emm_tide <- emmeans(abundance_mixed_model, ~ Tide | Environment + functional)
+tide_contrasts_full <- contrast(emm_tide, method = "pairwise", type = "response") %>%
+  summary(infer = TRUE)
+
+tide_df <- as.data.frame(tide_contrasts_full)
+
+# Apply one-sided tests based on hypotheses
+tide_higher <- tide_df %>%
+  filter(functional %in% c("Omnivore", "Herbivore", "Invertivore")) %>%
   mutate(
-    # Format numeric columns
-    ratio = sprintf("%.3f", ratio),
-    SE = sprintf("%.3f", SE),
-    z.ratio = sprintf("%.3f", z.ratio),
-    # Format p-values
-    p.value = case_when(
+    # For these groups, we expect Low > High, so ratio High/Low < 1
+    # One-sided p-value for ratio < 1
+    p.value = p.value / 2,  # Convert two-sided to one-sided
+    p.value = ifelse(ratio < 1, p.value, 1 - p.value)  # Correct direction
+  )
+
+tide_coral <- tide_df %>%
+  filter(functional == "Corallivore")
+  # Two-sided test for corallivores
+
+all_tide_contrasts_full <- bind_rows(tide_higher, tide_coral) %>%
+  arrange(functional, Environment)
+
+table_S3 <- all_tide_contrasts_full %>%
+  mutate(
+    ratio_formatted = sprintf("%.2f", ratio),
+    CI_formatted = sprintf("[%.2f, %.2f]", asymp.LCL, asymp.UCL),
+    SE_formatted = sprintf("%.3f", SE),
+    z_formatted = sprintf("%.2f", z.ratio),
+    p_formatted = case_when(
       p.value < 0.001 ~ "< 0.001",
-      p.value < 0.01 ~ sprintf("%.3f", p.value),
-      p.value < 0.05 ~ sprintf("%.3f", p.value),
       TRUE ~ sprintf("%.3f", p.value)
-    )
+    ),
+    sig = ifelse(p.value < 0.05, "*", "")
   ) %>%
-  select(functional, Environment, contrast, ratio, SE, z.ratio, p.value) %>%
+  select(functional, Environment, contrast, ratio_formatted, CI_formatted, 
+         SE_formatted, z_formatted, p_formatted, sig) %>%
   rename(
     "Functional Group" = functional,
     "Environment" = Environment,
     "Contrast" = contrast,
-    "Ratio (High/Low)" = ratio,
-    "Std. Error" = SE,
-    "z-ratio" = z.ratio,
-    "p-value" = p.value
+    "Ratio (High/Low)" = ratio_formatted,
+    "95% CI" = CI_formatted,
+    "SE" = SE_formatted,
+    "z" = z_formatted,
+    "P" = p_formatted,
+    " " = sig
   )
 
-# Add caption
 caption_S3 <- paste0(
-  "Table S3. Planned contrasts testing tidal effects (High vs Low tide) on fish functional group abundances within each environment.\n",
-  "Negative binomial GLMM with Tukey adjustment. Ratios represent High Tide / Low Tide abundances.\n",
-  "One-sided tests: Omnivores, Herbivores, and Invertivores tested for High < Low; Corallivores tested for High > Low."
+"Table S3. Tidal effects on functional group abundances within each environment.\n",
+"Negative binomial GLMM; random effect: Habitat. Ratios = High Tide / Low Tide.\n",
+"One-sided tests for Omnivores, Herbivores, Invertivores (H₁: Low > High);\n",
+"two-sided for Corallivores. * P < 0.05. Lowercase letters in Fig. 2A correspond to these contrasts."
 )
 
-# Create table grob with theme
 table_S3_grob <- tableGrob(table_S3, theme = table_theme, rows = NULL)
-title_S3 <- textGrob(caption_S3, 
-                     x = 0.5, vjust = 0, y = -0.5, 
-                     gp = gpar(fontsize = 10, fontface = "italic"))
-
-# Combine title and table
+title_S3 <- textGrob(caption_S3, x = 0.5, vjust = 0, y = -0.5, 
+                     gp = gpar(fontsize = 9, fontface = "italic"))
 final_S3 <- arrangeGrob(title_S3, table_S3_grob, 
-                        heights = unit.c(unit(3, "lines"), unit(1, "null")))
+                        heights = unit.c(unit(4, "lines"), unit(1, "null")))
 
-# Save Table S3
-png(here("Outputs", "TableS3.png"), 
-    width = 11, height = 6, 
-    units = "in", res = 300)
-grid.draw(final_S3)  
+png(here("Outputs", "TableS3_updated.png"), width = 12, height = 7, units = "in", res = 300)
+grid.draw(final_S3)
 dev.off()
 
 ```
@@ -1208,156 +1243,191 @@ dev.off()
 ### Table S4
 ```{r TableS4}
 
-table_S4 <- sgd_by_tide_all %>%
+emm_sgd_by_tide <- emmeans(abundance_mixed_model, ~ Environment | Tide + functional)
+sgd_by_tide_full <- contrast(emm_sgd_by_tide, method = "pairwise", type = "response") %>%
+  summary(infer = TRUE)
+
+sgd_tide_df <- as.data.frame(sgd_by_tide_full)
+
+# Apply directional tests
+sgd_tide_higher <- sgd_tide_df %>%
+  filter(functional %in% c("Omnivore", "Herbivore", "Invertivore")) %>%
   mutate(
-    ratio = sprintf("%.3f", ratio),
-    SE = sprintf("%.3f", SE),
-    z.ratio = sprintf("%.3f", z.ratio),
-    p.value = case_when(
+    p.value = p.value / 2,
+    p.value = ifelse(ratio < 1, p.value, 1 - p.value)
+  )
+
+sgd_tide_coral <- sgd_tide_df %>%
+  filter(functional == "Corallivore")
+
+sgd_by_tide_all_full <- bind_rows(sgd_tide_higher, sgd_tide_coral) %>%
+  arrange(functional, Tide)
+
+table_S4 <- sgd_by_tide_all_full %>%
+  mutate(
+    # Express as SGD/Ambient (invert the ratio since emmeans gives Ambient/SGD)
+    ratio_sgd = 1/ratio,
+    CI_lower = 1/asymp.UCL,
+    CI_upper = 1/asymp.LCL,
+    ratio_formatted = sprintf("%.2f", ratio_sgd),
+    CI_formatted = sprintf("[%.2f, %.2f]", CI_lower, CI_upper),
+    SE_formatted = sprintf("%.3f", SE),
+    z_formatted = sprintf("%.2f", abs(z.ratio)),
+    p_formatted = case_when(
       p.value < 0.001 ~ "< 0.001",
-      p.value < 0.01 ~ sprintf("%.3f", p.value),
-      p.value < 0.05 ~ sprintf("%.3f", p.value),
       TRUE ~ sprintf("%.3f", p.value)
-    )
+    ),
+    sig = ifelse(p.value < 0.05, "*", "")
   ) %>%
-  select(functional, Tide, contrast, ratio, SE, z.ratio, p.value) %>%
+  select(functional, Tide, ratio_formatted, CI_formatted, SE_formatted, 
+         z_formatted, p_formatted, sig) %>%
   rename(
     "Functional Group" = functional,
     "Tidal State" = Tide,
-    "Contrast" = contrast,
-    "Ratio (SGD/Ambient)" = ratio,
-    "Std. Error" = SE,
-    "z-ratio" = z.ratio,
-    "p-value" = p.value
+    "Ratio (SGD/Amb)" = ratio_formatted,
+    "95% CI" = CI_formatted,
+    "SE" = SE_formatted,
+    "z" = z_formatted,
+    "P" = p_formatted,
+    " " = sig
   )
 
 caption_S4 <- paste0(
-  "Table S4. Planned contrasts testing effects of submarine groundwater discharge (SGD) on fish functional group abundances at each tidal state.\n",
-  "Negative binomial GLMM with Tukey adjustment. Ratios represent SGD Environment / Ambient Environment.\n",
-  "One-sided tests: Omnivores, Herbivores, and Invertivores tested for SGD > Ambient; Corallivores tested for SGD < Ambient."
+"Table S4. SGD effects on functional group abundances at each tidal state.\n",
+"Negative binomial GLMM; random effect: Habitat. Ratios = SGD / Ambient abundance.\n",
+"One-sided tests for Omnivores, Herbivores, Invertivores (H₁: SGD > Ambient);\n",
+"two-sided for Corallivores. * P < 0.05."
 )
 
 table_S4_grob <- tableGrob(table_S4, theme = table_theme, rows = NULL)
-title_S4 <- textGrob(caption_S4, 
-                     x = 0.5, vjust = 0, y = -0.5, 
-                     gp = gpar(fontsize = 10, fontface = "italic"))
-
+title_S4 <- textGrob(caption_S4, x = 0.5, vjust = 0, y = -0.5, 
+                     gp = gpar(fontsize = 9, fontface = "italic"))
 final_S4 <- arrangeGrob(title_S4, table_S4_grob, 
-                        heights = unit.c(unit(3, "lines"), unit(1, "null")))
+                        heights = unit.c(unit(4, "lines"), unit(1, "null")))
 
-png(here("Outputs", "TableS4.png"), 
-    width = 11, height = 6, 
-    units = "in", res = 300)
-grid.draw(final_S4)  
+png(here("Outputs", "TableS4_updated.png"), width = 11, height = 6, units = "in", res = 300)
+grid.draw(final_S4)
 dev.off()
-
 
 ```
 
 ### Table S5
 ```{r TableS5}
 
-# Format abundance contrasts table
-table_S5 <- all_sgd_contrasts %>%
+emm_sgd <- emmeans(abundance_mixed_model, ~ Environment * functional)
+sgd_contrasts_full <- contrast(emm_sgd, method = "pairwise", type = "response", 
+                                by = "functional") %>%
+  summary(infer = TRUE)
+
+sgd_df <- as.data.frame(sgd_contrasts_full)
+
+# Apply directional tests
+sgd_higher <- sgd_df %>%
+  filter(functional %in% c("Omnivore", "Herbivore", "Invertivore")) %>%
   mutate(
-    # Format numeric columns
-    ratio = sprintf("%.3f", ratio),
-    SE = sprintf("%.3f", SE),
-    z.ratio = sprintf("%.3f", z.ratio),
-    # Format p-values
-    p.value = case_when(
-      p.value < 0.001 ~ "< 0.001",
-      p.value < 0.01 ~ sprintf("%.3f", p.value),
-      p.value < 0.05 ~ sprintf("%.3f", p.value),
-      TRUE ~ sprintf("%.3f", p.value)
-    )
-  ) %>%
-  select(functional, contrast, ratio, SE, z.ratio, p.value) %>%
-  rename(
-    "Functional Group" = functional,
-    "Contrast" = contrast,
-    "Ratio (SGD/Ambient)" = ratio,
-    "Std. Error" = SE,
-    "z-ratio" = z.ratio,
-    "p-value" = p.value
+    p.value = p.value / 2,
+    p.value = ifelse(ratio < 1, p.value, 1 - p.value)
   )
 
-# Add caption
+sgd_coral <- sgd_df %>%
+  filter(functional == "Corallivore")
+
+all_sgd_full <- bind_rows(sgd_higher, sgd_coral)
+
+table_S5 <- all_sgd_full %>%
+  mutate(
+    ratio_sgd = 1/ratio,
+    CI_lower = 1/asymp.UCL,
+    CI_upper = 1/asymp.LCL,
+    ratio_formatted = sprintf("%.2f", ratio_sgd),
+    CI_formatted = sprintf("[%.2f, %.2f]", CI_lower, CI_upper),
+    SE_formatted = sprintf("%.3f", SE),
+    z_formatted = sprintf("%.2f", abs(z.ratio)),
+    p_formatted = case_when(
+      p.value < 0.001 ~ "< 0.001",
+      TRUE ~ sprintf("%.3f", p.value)
+    ),
+    sig = ifelse(p.value < 0.05, "*", "")
+  ) %>%
+  select(functional, ratio_formatted, CI_formatted, SE_formatted, 
+         z_formatted, p_formatted, sig) %>%
+  rename(
+    "Functional Group" = functional,
+    "Ratio (SGD/Amb)" = ratio_formatted,
+    "95% CI" = CI_formatted,
+    "SE" = SE_formatted,
+    "z" = z_formatted,
+    "P" = p_formatted,
+    " " = sig
+  )
+
 caption_S5 <- paste0(
-  "Table S5. Planned contrasts testing effects of submarine groundwater discharge (SGD) on fish functional group abundances, averaged across tidal states.\n",
-  "Negative binomial GLMM with Tukey adjustment. Ratios represent SGD Environment / Ambient Environment.\n",
-  "One-sided tests: Omnivores, Herbivores, and Invertivores tested for SGD > Ambient; Corallivores tested for SGD < Ambient."
+"Table S5. SGD effects on functional group abundances, averaged across tidal states.\n",
+"Negative binomial GLMM; random effect: Habitat. Ratios = SGD / Ambient abundance.\n",
+"One-sided tests for Omnivores, Herbivores, Invertivores (H₁: SGD > Ambient);\n",
+"two-sided for Corallivores. * P < 0.05. Uppercase letters in Fig. 2A correspond to these contrasts."
 )
 
-# Create table grob with theme
 table_S5_grob <- tableGrob(table_S5, theme = table_theme, rows = NULL)
-title_S5 <- textGrob(caption_S5, 
-                     x = 0.5, vjust = 0, y = -0.5, 
-                     gp = gpar(fontsize = 10, fontface = "italic"))
-
-# Combine title and table
+title_S5 <- textGrob(caption_S5, x = 0.5, vjust = 0, y = -0.5, 
+                     gp = gpar(fontsize = 9, fontface = "italic"))
 final_S5 <- arrangeGrob(title_S5, table_S5_grob, 
-                        heights = unit.c(unit(3, "lines"), unit(1, "null")))
+                        heights = unit.c(unit(4, "lines"), unit(1, "null")))
 
-# Save Table S5
-png(here("Outputs", "TableS5.png"), 
-    width = 10, height = 5, 
-    units = "in", res = 300)
-grid.draw(final_S5)  
+png(here("Outputs", "TableS5_updated.png"), width = 10, height = 5, units = "in", res = 300)
+grid.draw(final_S5)
 dev.off()
-
 
 ```
 
 ### Table S6
 ```{r TableS6}
 
-table_S6 <- richness_contrasts %>%
+emm_richness <- emmeans(richness_model, ~ Tide | Environment, type = "response")
+richness_contrasts_full <- contrast(emm_richness, method = "pairwise") %>%
+  summary(infer = TRUE)
+
+richness_df <- as.data.frame(richness_contrasts_full)
+
+table_S6 <- richness_df %>%
   mutate(
-    # Format numeric columns
-    ratio = sprintf("%.3f", ratio),
-    SE = sprintf("%.3f", SE),
-    z.ratio = sprintf("%.3f", z.ratio),
-    # Format p-values
-    p.value = case_when(
+    ratio_formatted = sprintf("%.2f", ratio),
+    CI_formatted = sprintf("[%.2f, %.2f]", asymp.LCL, asymp.UCL),
+    SE_formatted = sprintf("%.3f", SE),
+    z_formatted = sprintf("%.2f", z.ratio),
+    p_formatted = case_when(
       p.value < 0.001 ~ "< 0.001",
-      p.value < 0.01 ~ sprintf("%.3f", p.value),
-      p.value < 0.05 ~ sprintf("%.3f", p.value),
       TRUE ~ sprintf("%.3f", p.value)
-    )
+    ),
+    sig = ifelse(p.value < 0.05, "*", "")
   ) %>%
-  select(Environment, contrast, ratio, SE, z.ratio, p.value) %>%
+  select(Environment, contrast, ratio_formatted, CI_formatted, SE_formatted, 
+         z_formatted, p_formatted, sig) %>%
   rename(
     "Environment" = Environment,
     "Contrast" = contrast,
-    "Ratio (High/Low)" = ratio,
-    "Std. Error" = SE,
-    "z-ratio" = z.ratio,
-    "p-value" = p.value
+    "Ratio (High/Low)" = ratio_formatted,
+    "95% CI" = CI_formatted,
+    "SE" = SE_formatted,
+    "z" = z_formatted,
+    "P" = p_formatted,
+    " " = sig
   )
 
-# Add caption
 caption_S6 <- paste0(
-  "Table S6. Planned contrasts testing tidal effects (High vs Low tide) on species richness within each environment.\n",
-  "Negative binomial GLMM with Tukey adjustment. Ratios represent High Tide / Low Tide species richness.\n",
-  "Two-sided tests."
+"Table S6. Tidal effects on species richness within each environment.\n",
+"Negative binomial GLMM; random effect: Habitat. Ratios = High Tide / Low Tide richness.\n",
+"Two-sided tests. * P < 0.05. Significance assertions in Fig. 2C derived from these contrasts."
 )
 
-# Create table grob
 table_S6_grob <- tableGrob(table_S6, theme = table_theme, rows = NULL)
-title_S6 <- textGrob(caption_S6, 
-                     x = 0.5, vjust = 0, y = -0.5, 
-                     gp = gpar(fontsize = 10, fontface = "italic"))
-
-# Combine title and table
+title_S6 <- textGrob(caption_S6, x = 0.5, vjust = 0, y = -0.5, 
+                     gp = gpar(fontsize = 9, fontface = "italic"))
 final_S6 <- arrangeGrob(title_S6, table_S6_grob, 
-                        heights = unit.c(unit(2.5, "lines"), unit(1, "null")))
+                        heights = unit.c(unit(3, "lines"), unit(1, "null")))
 
-# Save Table S6
-png(here("Outputs", "TableS6.png"), 
-    width = 10, height = 4, 
-    units = "in", res = 300)
-grid.draw(final_S6)  
+png(here("Outputs", "TableS6_updated.png"), width = 10, height = 4, units = "in", res = 300)
+grid.draw(final_S6)
 dev.off()
 
 
@@ -1373,7 +1443,6 @@ Tidal changes in fish feeding rates across functional groups and substrates. Poi
 
 
 ## Plotting Start
-Pre-process data. 
 ```{r Fig3plot_1}
 
 # Functional group bite rate analysis 
@@ -1709,63 +1778,57 @@ herbivore_sgd_contrast <- pairs(sgd_herbivore) %>%
   filter(functional == "Herbivore")
 
 
-# Get emmeans and contrasts
-sgd_emmeans <- emmeans(feed_model, ~ Environment | Tide + functional, type = "response")
-sgd_contrasts <- pairs(sgd_emmeans)
+# Get emmeans with CIs
+sgd_emmeans_feed <- emmeans(feed_model, ~ Environment | Tide + functional, type = "response")
+sgd_contrasts_feed <- pairs(sgd_emmeans_feed) %>%
+  summary(infer = TRUE)
 
-# Convert contrasts to data frame
-contrasts_df <- as.data.frame(sgd_contrasts)
+feed_df <- as.data.frame(sgd_contrasts_feed)
 
-
-# Alternative simpler version without interpretation column 
-table_S7_simple <- contrasts_df %>%
+table_S7 <- feed_df %>%
   mutate(
-    # Create combined group column
-    Group = paste(functional, "-", Tide),
-    
-    # Format numeric columns
-    ratio_formatted = sprintf("%.3f", ratio),
+    Group = paste(functional, Tide, sep = " - "),
+    # Invert ratio to show SGD/Ambient
+    ratio_sgd = 1/ratio,
+    CI_lower = 1/asymp.UCL,
+    CI_upper = 1/asymp.LCL,
+    ratio_formatted = sprintf("%.2f", ratio_sgd),
+    CI_formatted = sprintf("[%.2f, %.2f]", CI_lower, CI_upper),
     SE_formatted = sprintf("%.3f", SE),
-    z.ratio_formatted = sprintf("%.3f", z.ratio),
-    
-    # Format p-values
-    p.value_formatted = case_when(
+    z_formatted = sprintf("%.2f", abs(z.ratio)),
+    p_formatted = case_when(
       p.value < 0.001 ~ "< 0.001",
-      p.value < 0.01 ~ sprintf("%.3f", p.value),
-      p.value < 0.05 ~ sprintf("%.3f", p.value),
       TRUE ~ sprintf("%.3f", p.value)
-    )
+    ),
+    sig = ifelse(p.value < 0.05, "*", "")
   ) %>%
-  
-  # Select and rename columns
-  select(Group, ratio_formatted, SE_formatted, z.ratio_formatted, df, p.value_formatted) %>%
+  select(Group, ratio_formatted, CI_formatted, SE_formatted, z_formatted, 
+         df, p_formatted, sig) %>%
   rename(
     "Functional Group - Tide" = Group,
-    "Ratio (Ambient/SGD)" = ratio_formatted,
-    "Std. Error" = SE_formatted,
-    "z-ratio" = z.ratio_formatted,
+    "Ratio (SGD/Amb)" = ratio_formatted,
+    "95% CI" = CI_formatted,
+    "SE" = SE_formatted,
+    "z" = z_formatted,
     "df" = df,
-    "p-value" = p.value_formatted
+    "P" = p_formatted,
+    " " = sig
   )
 
-# Create caption
-caption_S7 <- "Table S7. Contrasts of feeding rates between SGD and ambient environments across functional groups and tidal states.\nTweedie GLMM with log link. Ratios < 1 indicate higher feeding rates in SGD environments."
+caption_S7 <- paste0(
+"Table S7. SGD effects on feeding rates across functional groups and tidal states.\n",
+"Tweedie GLMM with log link; random effect: Habitat. Ratios = SGD / Ambient feeding rate.\n",
+"Two-sided tests. * P < 0.05."
+)
 
-# Create table with caption 
-table_S7_grob <- tableGrob(table_S7_simple, theme = table_theme, rows = NULL)
-title_S7 <- textGrob(caption_S7, 
-                     x = 0.5, vjust = 0, y = -0.5, 
-                     gp = gpar(fontsize = 10, fontface = "italic"))
-
-# Combine title and table
+table_S7_grob <- tableGrob(table_S7, theme = table_theme, rows = NULL)
+title_S7 <- textGrob(caption_S7, x = 0.5, vjust = 0, y = -0.5, 
+                     gp = gpar(fontsize = 9, fontface = "italic"))
 final_S7 <- arrangeGrob(title_S7, table_S7_grob, 
                         heights = unit.c(unit(3, "lines"), unit(1, "null")))
 
-# Save Table S7
-png(here("Outputs", "TableS7.png"), 
-    width = 10, height = 8, 
-    units = "in", res = 300)
-grid.draw(final_S7)  
+png(here("Outputs", "TableS7_updated.png"), width = 11, height = 8, units = "in", res = 300)
+grid.draw(final_S7)
 dev.off()
 
 
@@ -1794,57 +1857,88 @@ other_df_filtered$test_type <- "two-tailed"
 # Combine all results
 all_results <- rbind(omni_benthic_df, omni_water_df, other_df_filtered)
 
-# Format the table
-table_S8 <- all_results %>%
+# Get all emmeans with CIs
+all_groups_emmeans <- emmeans(my_glmm_gaussian, 
+                              ~ Environment * substrate * functional) %>%
+  summary(infer = TRUE)
+
+all_emmeans_df <- as.data.frame(all_groups_emmeans)
+
+# Combine with test results (from your original code)
+# Re-run tests to get consistent output
+omni_benthic_full <- emmeans(my_glmm_gaussian, 
+                             ~ Environment * substrate * functional,
+                             at = list(substrate = "Benthos", functional = "Omnivore"))
+omni_benthic_test <- test(omni_benthic_full, null = 0, side = "<") %>%
+  as.data.frame() %>%
+  mutate(test_type = "one-tailed (<)")
+
+omni_water_full <- emmeans(my_glmm_gaussian, 
+                           ~ Environment * substrate * functional,
+                           at = list(substrate = "Water Column", functional = "Omnivore"))
+omni_water_test <- test(omni_water_full, null = 0, side = ">") %>%
+  as.data.frame() %>%
+  mutate(test_type = "one-tailed (>)")
+
+other_test <- test(emmeans(my_glmm_gaussian, ~ Environment * substrate * functional), 
+                   null = 0, adjust = "tukey") %>%
+  as.data.frame() %>%
+  filter(functional != "Omnivore") %>%
+  mutate(test_type = "two-tailed")
+
+all_bite_tests <- bind_rows(omni_benthic_test, omni_water_test, other_test)
+
+# Merge with CI information
+all_emmeans_df <- as.data.frame(summary(emmeans(my_glmm_gaussian, 
+                                                 ~ Environment * substrate * functional),
+                                        infer = TRUE))
+
+table_S8 <- all_bite_tests %>%
+  left_join(all_emmeans_df %>% select(Environment, substrate, functional, lower.CL, upper.CL),
+            by = c("Environment", "substrate", "functional")) %>%
   mutate(
-    # Create a combined group column for clarity
     Group = paste(functional, substrate, sep = " - "),
-    # Format numeric columns to appropriate decimal places
-    emmean = sprintf("%.3f", emmean),
-    SE = sprintf("%.3f", SE),
-    t.ratio = sprintf("%.3f", t.ratio),
-    # Format p-values with appropriate notation
-    p.value_formatted = case_when(
+    emmean_formatted = sprintf("%.2f", emmean),
+    CI_formatted = sprintf("[%.2f, %.2f]", lower.CL, upper.CL),
+    SE_formatted = sprintf("%.3f", SE),
+    t_formatted = sprintf("%.2f", t.ratio),
+    p_formatted = case_when(
       p.value < 0.001 ~ "< 0.001",
-      p.value < 0.01 ~ sprintf("%.3f", p.value),
-      p.value < 0.05 ~ sprintf("%.3f", p.value),
       TRUE ~ sprintf("%.3f", p.value)
-    )
+    ),
+    sig = ifelse(p.value < 0.05, "*", "")
   ) %>%
-  # Select and rename columns
-  select(Environment, Group, emmean, SE, t.ratio, df, p.value_formatted) %>%
+  select(Environment, Group, emmean_formatted, CI_formatted, SE_formatted, 
+         t_formatted, df, p_formatted, sig) %>%
+  arrange(Group, Environment) %>%
   rename(
     "Environment" = Environment,
     "Functional Group - Substrate" = Group,
-    "Mean Difference" = emmean,
-    "Std. Error" = SE,
-    "t-ratio" = t.ratio,
+    "Mean Δ Bites/min" = emmean_formatted,
+    "95% CI" = CI_formatted,
+    "SE" = SE_formatted,
+    "t" = t_formatted,
     "df" = df,
-    "p-value" = p.value_formatted
-  ) %>%
-  # Sort by functional group, substrate, then SGD
-  arrange(`Functional Group - Substrate`, Environment)
+    "P" = p_formatted,
+    " " = sig
+  )
 
-# Create caption
-caption_S8 <- "Table S8. Tests of tidal differences in bite rates (low tide - high tide) across functional groups and substrates.\nGaussian GLMM with identity link. Positive values indicate increased feeding at low tide.\nOne-tailed tests for omnivores (H1: <0 for benthos, >0 for water column); two-tailed tests for all others."
+caption_S8 <- paste0(
+"Table S8. Tidal differences in bite rates (Low − High tide) by functional group and substrate.\n",
+"Gaussian GLMM; random effects: Habitat, Replicate. Positive values = higher feeding at low tide.\n",
+"One-tailed tests for Omnivores: benthos (H₁: < 0), water column (H₁: > 0); two-tailed for others.\n",
+"* P < 0.05. Colored points in Fig. 3 indicate significant differences from zero."
+)
 
-# Create table with caption 
 table_S8_grob <- tableGrob(table_S8, theme = table_theme, rows = NULL)
-title_S8 <- textGrob(caption_S8, 
-                     x = .5, vjust = 0, y = -.5, 
-                     gp = gpar(fontsize = 10, fontface = "italic"))
-
-# Combine title and table
+title_S8 <- textGrob(caption_S8, x = 0.5, vjust = 0, y = -0.5, 
+                     gp = gpar(fontsize = 9, fontface = "italic"))
 final_S8 <- arrangeGrob(title_S8, table_S8_grob, 
-                        heights = unit.c(unit(3, "lines"), unit(1, "null")))
+                        heights = unit.c(unit(4, "lines"), unit(1, "null")))
 
-# Save Table S8
-png(here("Outputs", "TableS8.png"), 
-    width = 10, height = 10, 
-    units = "in", res = 300)
-grid.draw(final_S8)  
+png(here("Outputs", "TableS8_updated.png"), width = 12, height = 12, units = "in", res = 300)
+grid.draw(final_S8)
 dev.off()
-
 
 ```
 
@@ -2131,148 +2225,152 @@ percentN_contrast <- emmeans(p_percentN_gamma_model, ~ Environment, type = "resp
 ### Table S9
 ```{r Table S9}
 
-# Extract model summary
+# extract coefficients table from model summary
 herbivory_summary <- summary(tweedie_model)
+model_coeffs <- herbivory_summary$coefficients$cond
 
-# Create formatted model summary table
-model_coeffs <- as.data.frame(herbivory_summary$coefficients$cond)
-model_coeffs$Term <- rownames(model_coeffs)
+# convert to data frame preserving column names
+model_coeffs_df <- data.frame(
+  Term = rownames(model_coeffs),
+  Estimate = model_coeffs[, 1],
+  SE = model_coeffs[, 2],
+  z_value = model_coeffs[, 3],
+  p_value = model_coeffs[, 4],
+  row.names = NULL
+)
 
-table_S9 <- model_coeffs %>%
+# get confidence intervals
+# for glmmTMB, calculate Wald CIs manually: estimate ± 1.96 * SE
+model_coeffs_df <- model_coeffs_df %>%
   mutate(
-    # Format numeric columns
-    Estimate = sprintf("%.3f", Estimate),
-    `Std. Error` = sprintf("%.3f", `Std. Error`),
-    `z value` = sprintf("%.3f", `z value`),
-    # Format p-values with significance notation
-    `Pr(>|z|)` = case_when(
-      `Pr(>|z|)` < 0.001 ~ "< 0.001",
-      `Pr(>|z|)` < 0.01 ~ sprintf("%.3f", `Pr(>|z|)`),
-      `Pr(>|z|)` < 0.05 ~ sprintf("%.3f", `Pr(>|z|)`),
-      TRUE ~ sprintf("%.3f", `Pr(>|z|)`)
-    )
-  ) %>%
-  select(Term, Estimate, `Std. Error`, `z value`, `Pr(>|z|)`) %>%
-  rename(
-    "Model Term" = Term,
-    "Log Estimate" = Estimate,
-    "Std. Error" = `Std. Error`,
-    "z-value" = `z value`,
-    "p-value" = `Pr(>|z|)`
+    CI_lower = Estimate - 1.96 * SE,
+    CI_upper = Estimate + 1.96 * SE
   )
 
-# Create caption
-caption_S9 <- paste(
-  "Table S9. Herbivory assay model summary.",
-  "Tweedie GLMM testing effects of algal source and deployment environment on consumption.",
-  "Model: consumed ~ source * environment + (1|habitat) + (1|date).",
-  "No significant source × environment interaction (p > 0.05) indicates parallel effects.",
-  sep = "\n"
+# format for table
+table_S9 <- model_coeffs_df %>%
+  mutate(
+    Estimate_formatted = sprintf("%.3f", Estimate),
+    CI_formatted = sprintf("[%.3f, %.3f]", CI_lower, CI_upper),
+    SE_formatted = sprintf("%.3f", SE),
+    z_formatted = sprintf("%.2f", z_value),
+    p_formatted = case_when(
+      p_value < 0.001 ~ "< 0.001",
+      TRUE ~ sprintf("%.3f", p_value)
+    )
+  ) %>%
+  select(Term, Estimate_formatted, CI_formatted, SE_formatted, z_formatted, p_formatted) %>%
+  rename(
+    "Model Term" = Term,
+    "Estimate (log)" = Estimate_formatted,
+    "95% CI" = CI_formatted,
+    "SE" = SE_formatted,
+    "z" = z_formatted,
+    "P" = p_formatted
+  )
+
+# create and save table
+caption_S9 <- paste0(
+  "Table S9. Herbivory model coefficients.\n",
+  "Tweedie GLMM with log link; random effects: habitat, date.\n",
+  "Model: consumed ~ source × environment + (1|habitat) + (1|date).",
 )
 
-# Create table
 table_S9_grob <- tableGrob(table_S9, theme = table_theme, rows = NULL)
+title_S9 <- textGrob(caption_S9, x = 0.5, vjust = 0, y = -0.5, 
+                     gp = gpar(fontsize = 9, fontface = "italic"))
+final_S9 <- arrangeGrob(title_S9, table_S9_grob, 
+                        heights = unit.c(unit(4, "lines"), unit(1, "null")))
 
-title_S9 <- textGrob(caption_S9, 
-                     x = .5, vjust = 0, y = -.5, 
-                     gp = gpar(fontsize = 10, fontface = "italic"))
-
-
-# Combine title and table
-final_S9 <- arrangeGrob(
-  title_S9, table_S9_grob,
-  heights = unit.c(unit(4, "lines"), unit(1, "null"))
-)
-
-# Save Table S9
-png(here("Outputs", "TableS9.png"), 
-    width = 10, height = 8, 
-    units = "in", res = 300)
-grid.draw(final_S9)  
+png(here("Outputs", "TableS9_updated.png"), width = 10, height = 5, units = "in", res = 300)
+grid.draw(final_S9)
 dev.off()
 ```
 
 ### Table S10
 ```{r TableS10}
 
-# Convert contrasts to data frames
-del15N_contrasts_df <- as.data.frame(del_contrast)
-percentN_contrasts_df <- as.data.frame(percentN_contrast)
+# Get CIs
+del_contrast_twosided <- emmeans(p_delN_gamma_model, ~ Environment, type = "response") %>%
+  pairs() %>%
+  summary(infer = TRUE)
 
-# Process both contrasts with same formatting
-format_contrast_table <- function(df, parameter_name) {
-  df %>%
-    mutate(
-      Parameter = parameter_name,
-      # Calculate percent increase from ratio
-      percent_increase = sprintf("%.0f%%", (1/ratio - 1) * 100),
-      # Format numeric columns
-      ratio_formatted = sprintf("%.3f", ratio),
-      SE_formatted = sprintf("%.3f", SE),
-      t_ratio_formatted = sprintf("%.3f", t.ratio),
-      # Format p-values
-      p_value_formatted = case_when(
-        p.value < 0.001 ~ "< 0.001",
-        p.value < 0.01 ~ sprintf("%.3f", p.value),
-        p.value < 0.05 ~ sprintf("%.3f", p.value),
-        TRUE ~ sprintf("%.3f", p.value)
-      )
-    ) %>%
-    select(Parameter, ratio_formatted, SE_formatted, percent_increase, 
-           t_ratio_formatted, df, p_value_formatted) %>%
-    rename(
-      "Parameter" = Parameter,
-      "Ratio (Ambient/SGD)" = ratio_formatted,
-      "Std. Error" = SE_formatted,
-      "% Increase in SGD" = percent_increase,
-      "t-ratio" = t_ratio_formatted,
-      "df" = df,
-      "p-value" = p_value_formatted
-    )
-}
+percentN_contrast_twosided <- emmeans(p_percentN_gamma_model, ~ Environment, type = "response") %>%
+  pairs() %>%
+  summary(infer = TRUE)
 
-# Create formatted tables
-table_S10_del15N <- format_contrast_table(del15N_contrasts_df, "δ15N")
-table_S10_percentN <- format_contrast_table(percentN_contrasts_df, "Percent Nitrogen")
+# Get p-values 
+del_contrast_onesided <- emmeans(p_delN_gamma_model, ~ Environment, type = "response") %>%
+  pairs(side = "<") %>%
+  summary()
 
-# Combine into single table
-table_S10_combined <- rbind(table_S10_del15N, table_S10_percentN)
+percentN_contrast_onesided <- emmeans(p_percentN_gamma_model, ~ Environment, type = "response") %>%
+  pairs(side = "<") %>%
+  summary()
 
-# Create caption (centered)
-caption_S10 <- paste(
-  "Table S10. Padina boryana nutrient content comparing SGD and ambient environments.",
-  "Gamma GLMs with log link. One-sided tests with H1: SGD > Ambient.",
-  "Ratios < 1 indicate higher values in SGD. Percent increase calculated as (1/ratio - 1) × 100.",
-  sep = "\n"
-)
-
-# Create table grob
-table_S10_grob <- tableGrob(table_S10_combined, theme = table_theme, rows = NULL)
-
-# Create centered title
-title_S10 <- textGrob(caption_S10,
-                      x = 0.5, hjust = 0.5, vjust = 1,  # Centered
-                      gp = gpar(fontsize = 10, fontface = "italic"))
-
-# Combine with proper spacing
-final_S10 <- arrangeGrob(
-  title_S10,
-  nullGrob(),  
-  table_S10_grob,
-  heights = unit.c(
-    unit(3, "lines"),  
-    unit(0.5, "lines"), 
-    unit(1, "null")    
+# Combine CIs and p-values
+del_df <- as.data.frame(del_contrast_twosided) %>%
+  mutate(
+    Parameter = "δ15N (‰)",
+    p.value = as.data.frame(del_contrast_onesided)$p.value  # Replace with one-sided p
   )
+
+pctN_df <- as.data.frame(percentN_contrast_twosided) %>%
+  mutate(
+    Parameter = "Nitrogen (%)",
+    p.value = as.data.frame(percentN_contrast_onesided)$p.value  # Replace with one-sided p
+  )
+
+# Get residual df from GLMs
+del_resid_df <- df.residual(p_delN_gamma_model)
+pctN_resid_df <- df.residual(p_percentN_gamma_model)
+
+# build table
+table_S10 <- bind_rows(del_df, pctN_df) %>%
+  mutate(
+    # Invert to show SGD/Ambient
+    ratio_sgd = 1/ratio,
+    CI_lower = 1/upper.CL,
+    CI_upper = 1/lower.CL,
+    percent_increase = sprintf("%.0f%%", (ratio_sgd - 1) * 100),
+    ratio_formatted = sprintf("%.3f", ratio_sgd),
+    CI_formatted = sprintf("[%.3f, %.3f]", CI_lower, CI_upper),
+    SE_formatted = sprintf("%.3f", SE),
+    t_formatted = sprintf("%.2f", abs(t.ratio)),
+    df_value = ifelse(Parameter == "δ15N (‰)", del_resid_df, pctN_resid_df),
+    p_formatted = case_when(
+      p.value < 0.001 ~ "< 0.001",
+      TRUE ~ sprintf("%.3f", p.value)
+    )
+  ) %>%
+  select(Parameter, ratio_formatted, CI_formatted, percent_increase, SE_formatted, 
+         t_formatted, df_value, p_formatted) %>%
+  rename(
+    "Parameter" = Parameter,
+    "Ratio (SGD/Amb)" = ratio_formatted,
+    "95% CI" = CI_formatted,
+    "SGD Increase" = percent_increase,
+    "SE" = SE_formatted,
+    "t" = t_formatted,
+    "df" = df_value,
+    "P" = p_formatted
+  )
+
+caption_S10 <- paste0(
+  "Table S10. Padina boryana nutrient content: SGD vs Ambient environments.\n",
+  "Gamma GLMs with log link. One-sided tests (H₁: SGD > Ambient); two-sided 95% CIs.\n",
+  "Ratios > 1 indicate higher values in SGD. Significance assertions in Fig. 4B-C derived from these contrasts."
 )
 
-# Save Table S10
-png(here("Outputs", "TableS10.png"), 
-    width = 10, height = 4, 
-    units = "in", res = 300)
-grid.draw(final_S10)  
-dev.off()
+table_S10_grob <- tableGrob(table_S10, theme = table_theme, rows = NULL)
+title_S10 <- textGrob(caption_S10, x = 0.5, vjust = 0, y = -0.5, 
+                      gp = gpar(fontsize = 9, fontface = "italic"))
+final_S10 <- arrangeGrob(title_S10, table_S10_grob, 
+                         heights = unit.c(unit(3, "lines"), unit(1, "null")))
 
+png(here("Outputs", "TableS10_updated.png"), width = 11, height = 4, units = "in", res = 300)
+grid.draw(final_S10)
+dev.off()
 
 ```
 
