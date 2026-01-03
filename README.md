@@ -1,4 +1,5 @@
-# Terrigenous nutrient pulses facilitate shifts in reef fish community structure and feeding through trophic plasticity
+# Pulsed resource subsidies restructure reef fish communities through behavioral plasticity 
+
 
 Zeff, M.<sup>1*</sup>, Barnas, D. M.<sup>2</sup>, Silbiger, N. J.<sup>3</sup>
 
