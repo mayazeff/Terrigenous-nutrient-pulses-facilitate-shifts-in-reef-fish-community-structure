@@ -14,7 +14,7 @@ knitr::opts_chunk$set(
   warning = FALSE,    # Hide warnings
   error = FALSE,      # Don't show errors (stops knitting on error)
   results = 'hide',   # Hide printed output
-  fig.show = 'hide'   # Hide figures
+  fig.show = 'asis'    # Show figures
 )
 ```
 
@@ -287,6 +287,8 @@ Fig1EF <- carb_chem %>%
     )
   ) 
 
+Fig1EF
+
 # Export figure
 ggsave(
   filename = here("Outputs", "Fig1EF.png"),
@@ -371,6 +373,7 @@ Fig1G <- ggplot(
     )
   )
 
+Fig1G
 
 # Export figure
 ggsave(
@@ -499,6 +502,9 @@ png(here("Outputs", "TableS1_updated.png"), width = 10, height = 4, units = "in"
 grid.draw(final_S1)
 dev.off()
 
+# Display inline
+grid.draw(final_S1)
+
 ```
 
 
@@ -569,6 +575,9 @@ final_S2 <- arrangeGrob(title_S2, table_S2_grob,
 png(here("Outputs", "TableS2_updated.png"), width = 11, height = 3, units = "in", res = 300)
 grid.draw(final_S2)
 dev.off()
+
+grid.draw(final_S2)
+
 ```
 
 
@@ -1009,6 +1018,7 @@ ggsave(
   dpi = 1000                              
 )
 
+Fig2combined
 ```
 
 ## Statistical Analyses
@@ -1238,6 +1248,9 @@ png(here("Outputs", "TableS3_updated.png"), width = 12, height = 7, units = "in"
 grid.draw(final_S3)
 dev.off()
 
+grid.draw(final_S3)
+
+
 ```
 
 ### Table S4
@@ -1309,6 +1322,9 @@ png(here("Outputs", "TableS4_updated.png"), width = 11, height = 6, units = "in"
 grid.draw(final_S4)
 dev.off()
 
+grid.draw(final_S4)
+
+
 ```
 
 ### Table S5
@@ -1378,6 +1394,9 @@ png(here("Outputs", "TableS5_updated.png"), width = 10, height = 5, units = "in"
 grid.draw(final_S5)
 dev.off()
 
+grid.draw(final_S5)
+
+
 ```
 
 ### Table S6
@@ -1429,6 +1448,8 @@ final_S6 <- arrangeGrob(title_S6, table_S6_grob,
 png(here("Outputs", "TableS6_updated.png"), width = 10, height = 4, units = "in", res = 300)
 grid.draw(final_S6)
 dev.off()
+
+grid.draw(final_S6)
 
 
 ```
@@ -1713,6 +1734,8 @@ ggsave(
   dpi = 500  
 )
 
+Fig3
+
 ```
 
 
@@ -1831,6 +1854,7 @@ png(here("Outputs", "TableS7_updated.png"), width = 11, height = 8, units = "in"
 grid.draw(final_S7)
 dev.off()
 
+grid.draw(final_S7)
 
 
 ```
@@ -1939,6 +1963,8 @@ final_S8 <- arrangeGrob(title_S8, table_S8_grob,
 png(here("Outputs", "TableS8_updated.png"), width = 12, height = 12, units = "in", res = 300)
 grid.draw(final_S8)
 dev.off()
+
+grid.draw(final_S8)
 
 ```
 
@@ -2176,6 +2202,8 @@ ggsave(here("Outputs", "Fig4.png"),
        height = 8,
        width = 9,
        dpi = 500) 
+
+Fig4
 ```
 
 ## Statistical Analyses
@@ -2273,7 +2301,7 @@ table_S9 <- model_coeffs_df %>%
 caption_S9 <- paste0(
   "Table S9. Herbivory model coefficients.\n",
   "Tweedie GLMM with log link; random effects: habitat, date.\n",
-  "Model: consumed ~ source × environment + (1|habitat) + (1|date).",
+  "Model: consumed ~ source × environment + (1|habitat) + (1|date)."
 )
 
 table_S9_grob <- tableGrob(table_S9, theme = table_theme, rows = NULL)
@@ -2285,6 +2313,9 @@ final_S9 <- arrangeGrob(title_S9, table_S9_grob,
 png(here("Outputs", "TableS9_updated.png"), width = 10, height = 5, units = "in", res = 300)
 grid.draw(final_S9)
 dev.off()
+
+grid.draw(final_S9)
+
 ```
 
 ### Table S10
@@ -2371,6 +2402,8 @@ final_S10 <- arrangeGrob(title_S10, table_S10_grob,
 png(here("Outputs", "TableS10_updated.png"), width = 11, height = 4, units = "in", res = 300)
 grid.draw(final_S10)
 dev.off()
+
+grid.draw(final_S10)
 
 ```
 
