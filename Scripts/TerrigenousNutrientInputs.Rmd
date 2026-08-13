@@ -40,6 +40,8 @@ pacman::p_load(
   emmeans, 
   nlme,
   glmmTMB, 
+  performance,
+  DHARMa,
   # Interactive viz
   # Project management
   here, report 
@@ -195,7 +197,8 @@ table_theme <- ttheme_default(
 
 # Figure 1.
 
-(A) Map of Mo'orea showing study location and (B) experimental site configuration with SGD-influenced sites positioned down-current of the groundwater seep (black circle) and ambient sites up-current. (C) Underwater camera deployment for fish community surveys and (D) herbivory assay setup showing paired Padina boryana specimens in mesh enclosures. (E-F) Mean salinity (± SE) across tidal cycles in SGD and ambient environments. Letters indicate significant differences between tides within each environment (Gamma GLMM, p < 0.05). (G) Mean percent nitrogen content (± SE) of Turbinaria ornata specimens collected from ambient and SGD environments, with letters indicating significant differences between environments (Gamma GLM, p < 0.001). Together, these data highlight  the tidally-driven influx of nutrient-rich freshwater at our SGD sites. 
+Fig. 1. (a) Map of Moʻorea showing study location and (b) experimental site configuration with submarine groundwater discharge (SGD)-influenced sites positioned down-current of the groundwater seep (black circle) and ambient sites up-current. (c) Underwater camera deployment for fish community surveys and (d) herbivory assay setup showing paired Padina boryana specimens in mesh enclosures. (e,f) Mean salinity (± SE) across tidal cycles in SGD and ambient environments; letters indicate significant tidal differences within each environment (Gaussian linear mixed model, two-sided contrasts, p < 0.05; Table S1). (g) Mean nitrogen content (% ± SE) of Turbinaria ornata from ambient and SGD environments; letters indicate a significant difference between environments (Gamma generalized linear model, two-sided test, p < 0.05; Table S2). Graphic elements created using Canva and Microsoft PowerPoint.
+
 
 
 ## Plotting
@@ -249,9 +252,6 @@ Fig1EF <- carb_chem %>%
       "Ambient Environment" = ambient_color
     )
   ) +
-  
-  # Log-transform y-axis to better display the large salinity reduction in SGD at low tide
-  coord_trans(y = "log") +
   
   # Create side-by-side panels for direct comparison
   facet_wrap(
@@ -390,105 +390,132 @@ ggsave(
 ## Statistical Analyses
 
 ```{r Fig1Stats}
-# ------------------------------------
+
 # SALINITY ANALYSIS
-# Test a priori hypothesis: SGD reduces salinity during low tide due to freshwater influx
-# ------------------------------------
-
-
-# Fit Gamma GLMM to account for heterogeneous variance across treatments
-# Random effects structure accounts for spatial (Habitat) and temporal (SamplingTime) non-independence
+# ---- Model 1: Gamma GLMM ----
 salinity_model <- glmmTMB(
-  Salinity ~ Environment * Tide + (1|Habitat/SamplingTime), 
+  Salinity ~ Environment * Tide + (1|Habitat),
   data = carb_chem,
   family = Gamma(link = "log")
 )
+sim1 <- simulateResiduals(salinity_model, n = 1000)
+plot(sim1)
 
-# Test directional hypothesis: High tide > Low tide salinity
-salinity_contrasts <- emmeans(salinity_model, ~ Tide | Environment) %>%
-  pairs(adjust = "Tukey", side = ">")  
+check_singularity(salinity_model)   # fail
+testUniformity(sim1)$p.value        # fail
+testDispersion(sim1)$p.value        # fail
+testOutliers(sim1)$p.value          # fail
+
+# ---- Model 2: Gaussian, same structure ----
+salinity_gauss <- glmmTMB(
+  Salinity ~ Environment * Tide + (1|Habitat),
+  data = carb_chem
+)
+sim2 <- simulateResiduals(salinity_gauss, n = 1000)
+plot(sim2)
+
+check_singularity(salinity_gauss)   # OK
+testDispersion(sim2)$p.value        # OK
+testUniformity(sim2)$p.value        # fail
+testOutliers(sim2)$p.value          # fail
+
+# Note: uniformity + outlier flags trace to a few genuine low-salinity readings at the seep. Dispersion is satisfied and AIC favors Gaussian. 
+
+
+# ---- Model comparison ----
+AIC(salinity_model, salinity_gauss) 
+
+# ---- Tidal contrasts within each environment (two-sided) ----
+salinity_contrasts <- emmeans(salinity_gauss, ~ Tide | Environment) %>%
+  pairs(adjust = "Tukey")
+
+# Estimated marginal mean salinity (PSU) by tide within each environment
+salinity_emm <- emmeans(salinity_gauss, ~ Tide | Environment)
+
+salinity_pct <- as.data.frame(salinity_emm) %>%
+  select(Environment, Tide, emmean) %>%
+  pivot_wider(names_from = Tide, values_from = emmean) %>%
+  mutate(
+    abs_reduction_PSU = `High Tide` - `Low Tide`,
+    pct_reduction     = abs_reduction_PSU / `High Tide` * 100
+  )
+
 
 # ------------------------------------
 # ALGAL NITROGEN CONTENT ANALYSIS  
-# Test a priori hypothesis: SGD-exposed macroalgae have elevated nitrogen content due to groundwater nutrient enrichment
 # ------------------------------------
 
-# Initial model with habitat random effect
 turbinaria_mixed <- glmer(
   percent_N ~ Environment + (1|Habitat), 
   data = turbinaria,
   family = Gamma(link = "log")
 )
 
-# Random effect variance = 0,simplify to fixed effects model
+# Random effect variance = 0, simplify to fixed effects model
 turbinaria_model <- glm(
   percent_N ~ Environment,
   data = turbinaria,
   family = Gamma(link = "log")
 )
 
-# Test directional hypothesis: SGD > Ambient nitrogen content
-nitrogen_contrast <- emmeans(turbinaria_model, ~ Environment) %>%
-  pairs(side = "<")  # No adjustment needed for single comparison
-```
+# ---- Assumption checks (DHARMa) ----
+sim_turb <- simulateResiduals(turbinaria_model, n = 1000)
+plot(sim_turb)
 
+# p > 0.05 = assumption OK
+testUniformity(sim_turb)$p.value      # OK
+testDispersion(sim_turb)$p.value      # OK
+testOutliers(sim_turb)$p.value        # OK
+plotResiduals(sim_turb, form = turbinaria$Environment)   # OK
+
+# ---- Environment contrast (two-sided) ----
+nitrogen_contrast <- emmeans(turbinaria_model, ~ Environment) %>%
+  pairs()   # single comparison, no multiplicity adjustment
+
+```
 
 ## Supplemental Materials
 
 ### Table S1.
 ```{r S1Table}
-# Get CIs
-salinity_contrasts_twosided <- emmeans(salinity_model, ~ Tide | Environment) %>%
+
+# Get two-sided contrasts with CIs and p-values 
+salinity_contrasts_twosided <- emmeans(salinity_gauss, ~ Tide | Environment) %>%
   pairs(adjust = "tukey") %>%
   summary(infer = TRUE)
 
-# Get p-values 
-salinity_contrasts_onesided <- emmeans(salinity_model, ~ Tide | Environment) %>%
-  pairs(adjust = "tukey", side = ">") %>%
-  summary()
-
-# Combine CIs and p values
-salinity_contrasts_df <- as.data.frame(salinity_contrasts_twosided) %>%
-  mutate(p.value = as.data.frame(salinity_contrasts_onesided)$p.value)
-
-# For GLMMs with glmmTMB, z-ratios have asymptotic df (effectively infinite)
+salinity_contrasts_df <- as.data.frame(salinity_contrasts_twosided)
 
 table_S1 <- salinity_contrasts_df %>%
   mutate(
-    # Back-transform to ratio scale
-    ratio = exp(estimate),
-    ratio_lower = exp(asymp.LCL),
-    ratio_upper = exp(asymp.UCL),
-    # Format columns
-    ratio_formatted = sprintf("%.3f", ratio),
-    CI_formatted = sprintf("[%.3f, %.3f]", ratio_lower, ratio_upper),
-    SE_formatted = sprintf("%.3f", SE),
-    z_formatted = sprintf("%.2f", z.ratio),
-    df_note = "∞",  # Asymptotic
-    p_formatted = case_when(
+    diff_formatted = sprintf("%.3f", estimate),
+    CI_formatted   = sprintf("[%.3f, %.3f]", lower.CL, upper.CL),
+    SE_formatted   = sprintf("%.3f", SE),
+    t_formatted    = sprintf("%.2f", t.ratio),
+    df_formatted   = sprintf("%.0f", df),
+    p_formatted    = case_when(
       p.value < 0.001 ~ "< 0.001",
       TRUE ~ sprintf("%.3f", p.value)
     )
   ) %>%
-  select(Environment, contrast, ratio_formatted, CI_formatted, SE_formatted, 
-         z_formatted, df_note, p_formatted) %>%
+  select(Environment, contrast, diff_formatted, CI_formatted, SE_formatted,
+         t_formatted, df_formatted, p_formatted) %>%
   rename(
     "Environment" = Environment,
     "Contrast" = contrast,
-    "Ratio (High/Low)" = ratio_formatted,
+    "Difference (High − Low, PSU)" = diff_formatted,
     "95% CI" = CI_formatted,
     "SE" = SE_formatted,
-    "z" = z_formatted,
-    "df" = df_note,
+    "t" = t_formatted,
+    "df" = df_formatted,
     "P" = p_formatted
   )
 
 caption_S1 <- paste0(
-
 "Table S1. Planned contrasts testing tidal effects on salinity within each environment.\n",
-"Gamma GLMM with log link; random effects: Habitat/SamplingTime.\n",
-"Ratios represent High Tide / Low Tide salinity. One-sided tests (H₁: High > Low).\n",
-"df = ∞ indicates asymptotic z-distribution. Letters in Fig. 1E-F correspond to these contrasts."
+"Gaussian linear mixed model with Environment × Tide as fixed effects and Habitat as a random effect.\n",
+"Values are High Tide − Low Tide salinity differences (PSU). Two-sided tests, Tukey-adjusted;\n",
+"degrees of freedom approximated via Kenward-Roger. Letters in Fig. 1E-F correspond to these contrasts."
 )
 
 # Create and save table
@@ -510,45 +537,32 @@ grid.draw(final_S1)
 
 ### Table S2.
 ```{r S2Table}
-
-# Get CIs
-nitrogen_contrast_twosided <- emmeans(turbinaria_model, ~ Environment) %>%
+nitrogen_contrast <- emmeans(turbinaria_model, ~ Environment) %>%
   pairs() %>%
   summary(infer = TRUE)
 
-# Get p values
-nitrogen_contrast_onesided <- emmeans(turbinaria_model, ~ Environment) %>%
-  pairs(side = "<") %>%
-  summary()
-
-# Combine CIs and p values
-nitrogen_df <- as.data.frame(nitrogen_contrast_twosided) %>%
-  mutate(p.value = as.data.frame(nitrogen_contrast_onesided)$p.value)
-
-# For GLM, we get t-ratios with residual df
-# Extract residual df from model
-resid_df <- df.residual(turbinaria_model)
-
+# Build table
+nitrogen_df <- summary(nitrogen_contrast, infer = TRUE) %>%
+  as.data.frame()
 
 table_S2 <- nitrogen_df %>%
   mutate(
-    ratio = exp(estimate),
-    ratio_lower = exp(lower.CL),
-    ratio_upper = exp(upper.CL),
-    # Percent difference for effect size interpretation
-    percent_diff = sprintf("%.1f%%", (1/ratio - 1) * 100),
+    ratio        = exp(estimate),       
+    ratio_lower  = exp(lower.CL),
+    ratio_upper  = exp(upper.CL),
+    percent_diff = sprintf("%.1f%%", (1/ratio - 1) * 100),  # SGD increase over Ambient
     ratio_formatted = sprintf("%.3f", ratio),
-    CI_formatted = sprintf("[%.3f, %.3f]", ratio_lower, ratio_upper),
-    SE_formatted = sprintf("%.3f", SE),
-    t_formatted = sprintf("%.2f", t.ratio),
-    df_value = resid_df,
+    CI_formatted    = sprintf("[%.3f, %.3f]", ratio_lower, ratio_upper),
+    SE_formatted    = sprintf("%.3f", SE),
+    t_formatted     = sprintf("%.2f", t.ratio),
+    df_formatted    = sprintf("%.0f", df),  
     p_formatted = case_when(
       p.value < 0.001 ~ "< 0.001",
       TRUE ~ sprintf("%.3f", p.value)
     )
   ) %>%
-  select(contrast, ratio_formatted, CI_formatted, percent_diff, SE_formatted, 
-         t_formatted, df_value, p_formatted) %>%
+  select(contrast, ratio_formatted, CI_formatted, percent_diff, SE_formatted,
+         t_formatted, df_formatted, p_formatted) %>%
   rename(
     "Contrast" = contrast,
     "Ratio (Amb/SGD)" = ratio_formatted,
@@ -556,14 +570,14 @@ table_S2 <- nitrogen_df %>%
     "SGD Increase" = percent_diff,
     "SE" = SE_formatted,
     "t" = t_formatted,
-    "df" = df_value,
+    "df" = df_formatted,
     "P" = p_formatted
   )
 
 caption_S2 <- paste0(
 "Table S2. Planned contrast testing SGD effects on Turbinaria ornata nitrogen content.\n",
-"Gamma GLM with log link. Ratio < 1 indicates SGD > Ambient.\n",
-"One-sided test (H₁: SGD > Ambient). Letters in Fig. 1G correspond to this contrast."
+"Gamma GLM with log link. Ratio < 1 (Ambient/SGD) indicates higher nitrogen content at SGD sites.\n",
+"Two-sided test. Letters in Fig. 1G correspond to this contrast."
 )
 
 table_S2_grob <- tableGrob(table_S2, theme = table_theme, rows = NULL)
@@ -583,13 +597,12 @@ grid.draw(final_S2)
 
 # Figure 2.
 
-(A) Functional group abundance across SGD and ambient environments showing mean abundance (± SE) per 10-minute survey, with individual surveys as points. Letters indicate significant differences between functional groups (negative binomial GLMM with Tukey post-hoc comparisons, p < 0.05).  (B) Relative abundance of species found exclusively in SGD environments. Colored bars show these SGD-exclusive species, dominated by omnivorous taxa. Species comprising >5% of the SGD-unique community are labeled. Grey bars represent species that occur in both environments, shown for reference. (C) Species richness across tidal cycles in SGD and ambient environments, showing mean number of species (± SE) per survey with individual surveys as points. SGD environments showed significantly higher diversity during low tide (negative binomial GLMM, p < 0.05).
-
+Figure 2. (a) Functional group abundance across SGD and ambient environments; points are individual 10 min surveys (circles, high tide; triangles, low tide) and symbols show means ± SE. Letters indicate significant differences between ambient and SGD environments averaged across tidal states; absence of letters indicates no significant difference (negative binomial generalized linear mixed model [GLMM], two-sided contrasts, Tukey-adjusted, p < 0.05; Table S3). (b) Relative abundance of species found exclusively in SGD environments (coloured bars), dominated by omnivorous taxa; species comprising > 5 % of the SGD-unique community are labelled. Grey bars represent species occurring in both environments, shown for reference. (c) Species richness across tidal cycles; points are individual surveys (circles, high tide; triangles, low tide) and symbols show means ± SE. Shared letters indicate no significant difference (negative binomial GLMM, two-sided contrast, p < 0.05; Table S5)
 
 ## Plotting
 
 ### Fig. 2, Subplot A
-Process and summarize functional group data for analysis & plotting 
+
 ```{r Fig2process}
 
 # Summarize functional group abundances for each replicate sample
@@ -701,7 +714,7 @@ Fig2A <- ggplot() +
     axis.title.y = element_text(size = 14),
     legend.text = element_text(size = 14)
   ) +
-  # Add axis labels and significance caption
+  # Add axis labels 
   labs(
     x = "",
     y = "Mean abundance (± SE)"
@@ -860,7 +873,7 @@ Fig2B <- create_sgd_stacked_bar_vertical_text()
 
 # Calculate observed species richness per replicate
 genus_diversity_indices <- all_cam %>%
-  # Filter for natural (non-disturbed) fish observations only
+  # Filter for all fish observations (non feeding only)
   filter(Activity == "nat") %>%
   
   # Group by habitat, SGD exposure, tidal state, replicate, and unique species code
@@ -1023,129 +1036,75 @@ Fig2combined
 
 ## Statistical Analyses
 
-```{r fig2Astats}
 
-# Fit two candidate mixed models for fish functional group abundance:
-# Model 1: Includes random effects for habitat 
+```{r fig2Astats}
+# ============================================================
+# Figure 2A: Functional group abundance across SGD environments
+# Negative binomial GLMM (glmmTMB), two-tailed post-hoc contrasts
+# ============================================================
+
+
+# ---- Random-effects structure selection ----
+# Model 1: random intercept for habitat only
 # mixed_model1 <- glmmTMB(
 #   total ~ Environment * Tide * functional + (1|Habitat),
-#   family = nbinom2,
-#   data = funcs
-# )
-
-# Model 2: Adds random effect for replicate
+#   family = nbinom2, data = funcs)
+# Model 2: adds random intercept for replicate
 # mixed_model2 <- glmmTMB(
 #   total ~ Environment * Tide * functional + (1|Habitat) + (1|Replicate),
-#   family = nbinom2,
-#   data = funcs
-# )
+#   family = nbinom2, data = funcs)
+# AIC(mixed_model1, mixed_model2)   # added complexity did not improve fit
+# VarCorr(mixed_model1)             # replicate variance ~ 0 -> dropped
 
-# Model comparison: use AIC to check if added complexity improves fit
-# AIC(mixed_model1, mixed_model2)
-
-# Examine random effects variances in the more complex model
-# summary(mixed_model1)
-# VarCorr(mixed_model1)  
-# Interpretation (from VarCorr): 
-# - habitat: meaningful variance (reef vs sand)
-# - replicate: Very small variance (almost zero)
-
-# Remove replicate random effect
 abundance_mixed_model <- glmmTMB(
   total ~ Environment * Tide * functional + (1|Habitat),
   family = nbinom2,
   data = funcs
 )
 
+# ============================================================
+# Model assumption checks 
+# ============================================================
 
-# Estimate SGD effects (averaged over both tides) for each functional group
-# Get emmeans
+abundance_sim <- simulateResiduals(abundance_mixed_model)
+
+testDispersion(abundance_sim)    #OK
+testZeroInflation(abundance_sim) #OK
+check_overdispersion(abundance_mixed_model)  #OK
+testUniformity(abundance_mixed_model) #OK 
+testOutliers(abundance_sim) #OK
+
+
+# ============================================================
+# Post-hoc contrasts
+# ============================================================
+
+# ---- (1) SGD vs Ambient, averaged over tide, within each functional group ----
 emm_sgd <- emmeans(abundance_mixed_model, ~ Environment * functional)
-
-# Create contrasts for ALL combinations
-sgd_contrasts_all <- emm_sgd %>%
-  contrast(method = "pairwise", type = "response", by = "functional")
-
-# Get results with appropriate directional tests
-# For omnivores, herbivores, invertivores (expecting SGD > Ambient at both tides)
-sgd_results_higher <- sgd_contrasts_all %>%
-  summary(side = "<", adjust = "tukey") %>%
-  as.data.frame() %>%
-  filter(functional %in% c("Omnivore", "Herbivore", "Invertivore"))
-
-# For corallivores (two-sided test - no directional hypothesis)
-sgd_results_coral <- sgd_contrasts_all %>%
+all_sgd_contrasts <- emm_sgd %>%
+  contrast(method = "pairwise", type = "response", by = "functional") %>%
   summary(adjust = "tukey") %>%
-  as.data.frame() %>%
-  filter(functional == "Corallivore")
+  as.data.frame()
 
-# Combine all SGD results
-all_sgd_contrasts <- bind_rows(
-  sgd_results_higher,
-  sgd_results_coral
-) 
-
-
-
-# Tide Contrasts (High vs Low Tide within each SGD × Functional combination)
-# Get emmeans for SGD comparisons
+# ---- (2) High vs Low tide, within each Environment x functional group ----
 emm_tide <- emmeans(abundance_mixed_model, ~ Tide | Environment + functional)
-
-# Create contrasts for ALL combinations
-tide_contrasts_all <- emm_tide %>%
-  contrast(method = "pairwise", type = "response")
-
-# Get results with appropriate directional tests
-# For omnivores, herbivores, invertivores (expecting SGD > Ambient at both tides)
-tide_results_higher <- tide_contrasts_all %>%
-  summary(side = "<", adjust = "tukey") %>%
-  as.data.frame() %>%
-  filter(functional %in% c("Omnivore", "Herbivore", "Invertivore"))
-
-# For corallivores (two-sided test - no directional hypothesis)
-tide_results_coral <- tide_contrasts_all %>%
+all_tide_contrasts <- emm_tide %>%
+  contrast(method = "pairwise", type = "response") %>%
   summary(adjust = "tukey") %>%
   as.data.frame() %>%
-  filter(functional == "Corallivore")
-
-# Combine all tide results
-all_tide_contrasts <- bind_rows(
-  tide_results_higher,
-  tide_results_coral
-) %>%
   arrange(functional, Environment)
 
-
-
-# SGD vs Ambient at each tidal state
-# Get emmeans for environment comparisons at each tide separately
+# ---- (3) SGD vs Ambient, separately at each tidal state ----
 emm_sgd_by_tide <- emmeans(abundance_mixed_model, ~ Environment | Tide + functional)
-
-# Create contrasts
-sgd_by_tide_contrasts <- emm_sgd_by_tide %>%
-  contrast(method = "pairwise", type = "response")
-
-# Get results with appropriate directional tests
-# For omnivores, herbivores, invertivores (expecting SGD > Ambient)
-sgd_by_tide_higher <- sgd_by_tide_contrasts %>%
-  summary(side = "<", adjust = "tukey") %>%
-  as.data.frame() %>%
-  filter(functional %in% c("Omnivore", "Herbivore", "Invertivore"))
-
-# For corallivores (two-sided test - no directional hypothesis)
-sgd_by_tide_coral <- sgd_by_tide_contrasts %>%
+sgd_by_tide_all <- emm_sgd_by_tide %>%
+  contrast(method = "pairwise", type = "response") %>%
   summary(adjust = "tukey") %>%
   as.data.frame() %>%
-  filter(functional == "Corallivore")
-
-# Combine
-sgd_by_tide_all <- bind_rows(
-  sgd_by_tide_higher,
-  sgd_by_tide_coral
-) %>%
   arrange(functional, Tide)
-
 ```
+
+
+
 
 ```{r fig2Cstats}
 
@@ -1162,6 +1121,15 @@ richness_model <- glmmTMB(
   family = nbinom2,
   data = genus_diversity_indices
 )
+
+# ============================================================
+# Model assumption checks 
+# ============================================================
+richness_sim <- simulateResiduals(richness_model)
+plot(richness_sim)                 # OK
+testDispersion(richness_sim)       # OK
+testZeroInflation(richness_sim)    # OK
+check_overdispersion(richness_model) #OK
 
 
 # Get emmeans on response scale
@@ -1181,63 +1149,36 @@ richness_contrasts <- emm_richness %>%
 
 ```{r TableS3}
 
-# Re-run with confidence intervals
-emm_tide <- emmeans(abundance_mixed_model, ~ Tide | Environment + functional)
-tide_contrasts_full <- contrast(emm_tide, method = "pairwise", type = "response") %>%
-  summary(infer = TRUE)
+emm_sgd <- emmeans(abundance_mixed_model, ~ Environment * functional)
+sgd_df <- contrast(emm_sgd, method = "pairwise", type = "response",
+                   by = "functional") %>%
+  summary(infer = TRUE, adjust = "tukey") %>%
+  as.data.frame()
 
-tide_df <- as.data.frame(tide_contrasts_full)
-
-# Apply one-sided tests based on hypotheses
-tide_higher <- tide_df %>%
-  filter(functional %in% c("Omnivore", "Herbivore", "Invertivore")) %>%
+table_S3 <- sgd_df %>%
   mutate(
-    # For these groups, we expect Low > High, so ratio High/Low < 1
-    # One-sided p-value for ratio < 1
-    p.value = p.value / 2,  # Convert two-sided to one-sided
-    p.value = ifelse(ratio < 1, p.value, 1 - p.value)  # Correct direction
-  )
-
-tide_coral <- tide_df %>%
-  filter(functional == "Corallivore")
-  # Two-sided test for corallivores
-
-all_tide_contrasts_full <- bind_rows(tide_higher, tide_coral) %>%
-  arrange(functional, Environment)
-
-table_S3 <- all_tide_contrasts_full %>%
-  mutate(
-    ratio_formatted = sprintf("%.2f", ratio),
-    CI_formatted = sprintf("[%.2f, %.2f]", asymp.LCL, asymp.UCL),
-    SE_formatted = sprintf("%.3f", SE),
-    z_formatted = sprintf("%.2f", z.ratio),
-    p_formatted = case_when(
-      p.value < 0.001 ~ "< 0.001",
-      TRUE ~ sprintf("%.3f", p.value)
-    ),
-    sig = ifelse(p.value < 0.05, "*", "")
+    ratio_sgd = 1/ratio,                 # emmeans gives Ambient/SGD -> invert
+    CI_lower  = 1/asymp.UCL,
+    CI_upper  = 1/asymp.LCL,
+    ratio_formatted = sprintf("%.2f", ratio_sgd),
+    CI_formatted    = sprintf("[%.2f, %.2f]", CI_lower, CI_upper),
+    SE_formatted    = sprintf("%.3f", SE),
+    z_formatted     = sprintf("%.2f", abs(z.ratio)),
+    p_formatted = case_when(p.value < 0.001 ~ "< 0.001",
+                            TRUE ~ sprintf("%.3f", p.value))
   ) %>%
-  select(functional, Environment, contrast, ratio_formatted, CI_formatted, 
-         SE_formatted, z_formatted, p_formatted, sig) %>%
-  rename(
-    "Functional Group" = functional,
-    "Environment" = Environment,
-    "Contrast" = contrast,
-    "Ratio (High/Low)" = ratio_formatted,
-    "95% CI" = CI_formatted,
-    "SE" = SE_formatted,
-    "z" = z_formatted,
-    "P" = p_formatted,
-    " " = sig
-  )
+  select(functional, ratio_formatted, CI_formatted, SE_formatted,
+         z_formatted, p_formatted) %>%
+  rename("Functional Group" = functional, "Ratio (SGD/Amb)" = ratio_formatted,
+         "95% CI" = CI_formatted, "SE" = SE_formatted, "z" = z_formatted,
+         "P" = p_formatted)
 
 caption_S3 <- paste0(
-"Table S3. Tidal effects on functional group abundances within each environment.\n",
-"Negative binomial GLMM; random effect: Habitat. Ratios = High Tide / Low Tide.\n",
-"One-sided tests for Omnivores, Herbivores, Invertivores (H₁: Low > High);\n",
-"two-sided for Corallivores. * P < 0.05. Lowercase letters in Fig. 2A correspond to these contrasts."
+"Table S3. SGD effects on functional group abundances, averaged across tidal states.\n",
+"Negative binomial GLMM; random effect: Habitat. Ratios = SGD / Ambient abundance.\n",
+"Two-sided contrasts, Tukey-adjusted. Uppercase letters in Fig. 2A correspond to these contrasts."
 )
-
+# grob / png / grid.draw block unchanged
 table_S3_grob <- tableGrob(table_S3, theme = table_theme, rows = NULL)
 title_S3 <- textGrob(caption_S3, x = 0.5, vjust = 0, y = -0.5, 
                      gp = gpar(fontsize = 9, fontface = "italic"))
@@ -1257,60 +1198,35 @@ grid.draw(final_S3)
 ```{r TableS4}
 
 emm_sgd_by_tide <- emmeans(abundance_mixed_model, ~ Environment | Tide + functional)
-sgd_by_tide_full <- contrast(emm_sgd_by_tide, method = "pairwise", type = "response") %>%
-  summary(infer = TRUE)
+sgd_tide_df <- contrast(emm_sgd_by_tide, method = "pairwise", type = "response") %>%
+  summary(infer = TRUE, adjust = "tukey") %>%
+  as.data.frame()
 
-sgd_tide_df <- as.data.frame(sgd_by_tide_full)
-
-# Apply directional tests
-sgd_tide_higher <- sgd_tide_df %>%
-  filter(functional %in% c("Omnivore", "Herbivore", "Invertivore")) %>%
+table_S4 <- sgd_tide_df %>%
+  arrange(functional, Tide) %>%
   mutate(
-    p.value = p.value / 2,
-    p.value = ifelse(ratio < 1, p.value, 1 - p.value)
-  )
-
-sgd_tide_coral <- sgd_tide_df %>%
-  filter(functional == "Corallivore")
-
-sgd_by_tide_all_full <- bind_rows(sgd_tide_higher, sgd_tide_coral) %>%
-  arrange(functional, Tide)
-
-table_S4 <- sgd_by_tide_all_full %>%
-  mutate(
-    # Express as SGD/Ambient (invert the ratio since emmeans gives Ambient/SGD)
     ratio_sgd = 1/ratio,
-    CI_lower = 1/asymp.UCL,
-    CI_upper = 1/asymp.LCL,
+    CI_lower  = 1/asymp.UCL,
+    CI_upper  = 1/asymp.LCL,
     ratio_formatted = sprintf("%.2f", ratio_sgd),
-    CI_formatted = sprintf("[%.2f, %.2f]", CI_lower, CI_upper),
-    SE_formatted = sprintf("%.3f", SE),
-    z_formatted = sprintf("%.2f", abs(z.ratio)),
-    p_formatted = case_when(
-      p.value < 0.001 ~ "< 0.001",
-      TRUE ~ sprintf("%.3f", p.value)
-    ),
-    sig = ifelse(p.value < 0.05, "*", "")
+    CI_formatted    = sprintf("[%.2f, %.2f]", CI_lower, CI_upper),
+    SE_formatted    = sprintf("%.3f", SE),
+    z_formatted     = sprintf("%.2f", abs(z.ratio)),
+    p_formatted = case_when(p.value < 0.001 ~ "< 0.001",
+                            TRUE ~ sprintf("%.3f", p.value))
   ) %>%
-  select(functional, Tide, ratio_formatted, CI_formatted, SE_formatted, 
-         z_formatted, p_formatted, sig) %>%
-  rename(
-    "Functional Group" = functional,
-    "Tidal State" = Tide,
-    "Ratio (SGD/Amb)" = ratio_formatted,
-    "95% CI" = CI_formatted,
-    "SE" = SE_formatted,
-    "z" = z_formatted,
-    "P" = p_formatted,
-    " " = sig
-  )
+  select(functional, Tide, ratio_formatted, CI_formatted, SE_formatted,
+         z_formatted, p_formatted) %>%
+  rename("Functional Group" = functional, "Tidal State" = Tide,
+         "Ratio (SGD/Amb)" = ratio_formatted, "95% CI" = CI_formatted,
+         "SE" = SE_formatted, "z" = z_formatted, "P" = p_formatted)
 
 caption_S4 <- paste0(
 "Table S4. SGD effects on functional group abundances at each tidal state.\n",
 "Negative binomial GLMM; random effect: Habitat. Ratios = SGD / Ambient abundance.\n",
-"One-sided tests for Omnivores, Herbivores, Invertivores (H₁: SGD > Ambient);\n",
-"two-sided for Corallivores. * P < 0.05."
+"Two-sided contrasts, Tukey-adjusted."
 )
+
 
 table_S4_grob <- tableGrob(table_S4, theme = table_theme, rows = NULL)
 title_S4 <- textGrob(caption_S4, x = 0.5, vjust = 0, y = -0.5, 
@@ -1327,88 +1243,16 @@ grid.draw(final_S4)
 
 ```
 
+
 ### Table S5
 ```{r TableS5}
 
-emm_sgd <- emmeans(abundance_mixed_model, ~ Environment * functional)
-sgd_contrasts_full <- contrast(emm_sgd, method = "pairwise", type = "response", 
-                                by = "functional") %>%
-  summary(infer = TRUE)
-
-sgd_df <- as.data.frame(sgd_contrasts_full)
-
-# Apply directional tests
-sgd_higher <- sgd_df %>%
-  filter(functional %in% c("Omnivore", "Herbivore", "Invertivore")) %>%
-  mutate(
-    p.value = p.value / 2,
-    p.value = ifelse(ratio < 1, p.value, 1 - p.value)
-  )
-
-sgd_coral <- sgd_df %>%
-  filter(functional == "Corallivore")
-
-all_sgd_full <- bind_rows(sgd_higher, sgd_coral)
-
-table_S5 <- all_sgd_full %>%
-  mutate(
-    ratio_sgd = 1/ratio,
-    CI_lower = 1/asymp.UCL,
-    CI_upper = 1/asymp.LCL,
-    ratio_formatted = sprintf("%.2f", ratio_sgd),
-    CI_formatted = sprintf("[%.2f, %.2f]", CI_lower, CI_upper),
-    SE_formatted = sprintf("%.3f", SE),
-    z_formatted = sprintf("%.2f", abs(z.ratio)),
-    p_formatted = case_when(
-      p.value < 0.001 ~ "< 0.001",
-      TRUE ~ sprintf("%.3f", p.value)
-    ),
-    sig = ifelse(p.value < 0.05, "*", "")
-  ) %>%
-  select(functional, ratio_formatted, CI_formatted, SE_formatted, 
-         z_formatted, p_formatted, sig) %>%
-  rename(
-    "Functional Group" = functional,
-    "Ratio (SGD/Amb)" = ratio_formatted,
-    "95% CI" = CI_formatted,
-    "SE" = SE_formatted,
-    "z" = z_formatted,
-    "P" = p_formatted,
-    " " = sig
-  )
-
-caption_S5 <- paste0(
-"Table S5. SGD effects on functional group abundances, averaged across tidal states.\n",
-"Negative binomial GLMM; random effect: Habitat. Ratios = SGD / Ambient abundance.\n",
-"One-sided tests for Omnivores, Herbivores, Invertivores (H₁: SGD > Ambient);\n",
-"two-sided for Corallivores. * P < 0.05. Uppercase letters in Fig. 2A correspond to these contrasts."
-)
-
-table_S5_grob <- tableGrob(table_S5, theme = table_theme, rows = NULL)
-title_S5 <- textGrob(caption_S5, x = 0.5, vjust = 0, y = -0.5, 
-                     gp = gpar(fontsize = 9, fontface = "italic"))
-final_S5 <- arrangeGrob(title_S5, table_S5_grob, 
-                        heights = unit.c(unit(4, "lines"), unit(1, "null")))
-
-png(here("Outputs", "TableS5_updated.png"), width = 10, height = 5, units = "in", res = 300)
-grid.draw(final_S5)
-dev.off()
-
-grid.draw(final_S5)
-
-
-```
-
-### Table S6
-```{r TableS6}
-
 emm_richness <- emmeans(richness_model, ~ Tide | Environment, type = "response")
 richness_contrasts_full <- contrast(emm_richness, method = "pairwise") %>%
-  summary(infer = TRUE)
-
+  summary(infer = TRUE, adjust = "tukey")    
 richness_df <- as.data.frame(richness_contrasts_full)
 
-table_S6 <- richness_df %>%
+table_S5 <- richness_df %>%
   mutate(
     ratio_formatted = sprintf("%.2f", ratio),
     CI_formatted = sprintf("[%.2f, %.2f]", asymp.LCL, asymp.UCL),
@@ -1417,11 +1261,10 @@ table_S6 <- richness_df %>%
     p_formatted = case_when(
       p.value < 0.001 ~ "< 0.001",
       TRUE ~ sprintf("%.3f", p.value)
-    ),
-    sig = ifelse(p.value < 0.05, "*", "")
+    )
   ) %>%
-  select(Environment, contrast, ratio_formatted, CI_formatted, SE_formatted, 
-         z_formatted, p_formatted, sig) %>%
+  select(Environment, contrast, ratio_formatted, CI_formatted, SE_formatted,
+         z_formatted, p_formatted) %>%
   rename(
     "Environment" = Environment,
     "Contrast" = contrast,
@@ -1429,28 +1272,26 @@ table_S6 <- richness_df %>%
     "95% CI" = CI_formatted,
     "SE" = SE_formatted,
     "z" = z_formatted,
-    "P" = p_formatted,
-    " " = sig
+    "P" = p_formatted
   )
 
-caption_S6 <- paste0(
-"Table S6. Tidal effects on species richness within each environment.\n",
+caption_S5 <- paste0(
+"Table S5. Tidal effects on species richness within each environment.\n",
 "Negative binomial GLMM; random effect: Habitat. Ratios = High Tide / Low Tide richness.\n",
-"Two-sided tests. * P < 0.05. Significance assertions in Fig. 2C derived from these contrasts."
+"Two-sided contrasts, Tukey-adjusted. Letters in Fig. 2C correspond to these contrasts."
 )
 
-table_S6_grob <- tableGrob(table_S6, theme = table_theme, rows = NULL)
-title_S6 <- textGrob(caption_S6, x = 0.5, vjust = 0, y = -0.5, 
+table_S5_grob <- tableGrob(table_S5, theme = table_theme, rows = NULL)
+title_S5 <- textGrob(caption_S5, x = 0.5, vjust = 0, y = -0.5,
                      gp = gpar(fontsize = 9, fontface = "italic"))
-final_S6 <- arrangeGrob(title_S6, table_S6_grob, 
+final_S5 <- arrangeGrob(title_S5, table_S5_grob,
                         heights = unit.c(unit(3, "lines"), unit(1, "null")))
 
-png(here("Outputs", "TableS6_updated.png"), width = 10, height = 4, units = "in", res = 300)
-grid.draw(final_S6)
+png(here("Outputs", "TableS5_updated.png"), width = 10, height = 4, units = "in", res = 300)
+grid.draw(final_S5)
 dev.off()
 
-grid.draw(final_S6)
-
+grid.draw(final_S5)
 
 ```
 
@@ -1460,7 +1301,8 @@ grid.draw(final_S6)
 
 # Figure 3.
 
-Tidal changes in fish feeding rates across functional groups and substrates. Points show the mean difference (± SE) in bite rates between low and high tide, with positive values indicating higher feeding rates during low tide. Data are shown for both benthic and water column feeding across five functional groups in ambient and SGD-influenced environments. The dashed red line indicates no difference between tides. Colored points indicate statistically significant differences from zero (p < 0.05), while grey points indicate non-significant differences.
+Tidal changes in fish feeding rates across functional groups and substrates. Points show the mean difference (± SE) in bite rates between low and high tide; positive values indicate higher feeding at low tide. Data are shown for benthic and water column feeding across four functional groups in ambient and SGD environments. The dashed line indicates no difference between tides. Colored points indicate significant differences from zero; grey points indicate non-significant differences or trends (Gaussian generalized linear mixed model with environment-specific dispersion, two-sided tests, false discovery rate [FDR]-adjusted, p < 0.05; Table S7). Graphic elements created using Canva and Microsoft PowerPoint
+
 
 
 ## Plotting Start
@@ -1468,7 +1310,6 @@ Tidal changes in fish feeding rates across functional groups and substrates. Poi
 
 # Functional group bite rate analysis 
 # Identify which species were present at each replicate-tide
-
 present_species <- all_cam %>%
   filter(Activity == "nat") %>%
   distinct(Environment, Habitat, Replicate, code, functional, Tide) %>%
@@ -1547,50 +1388,32 @@ func_means <- func_groups %>%
 ```{r Fig3stats}
 
 # Fit Gaussian GLMM
-# Random effect for habitat accounts for site-level variation
+# diff = low-minus-high tide bite rate; random effects for habitat and replicate
 my_glmm_gaussian <- glmmTMB(
   diff ~ Environment * substrate * functional + (1|Habitat) + (1|Replicate),
+  dispformula = ~ Environment,
   family = gaussian(link = "identity"),
   data = func_groups
 )
 
-# Hypothesis testing based on a priori hypotheses about omnivore feeding behavior in response to SGD-influenced tidal changes.
-# Hypothesis: Omnivores reduce benthic feeding at low tide (negative difference)
-# This tests H0: diff >= 0 vs H1: diff < 0
-omni_benthic_full <- emmeans(my_glmm_gaussian, 
-                             ~ Environment * substrate * functional,
-                             at = list(substrate = "Benthos", 
-                                       functional = "Omnivore"))
-omni_benthic_test <- test( omni_benthic_full, null = 0, side = "<")
+# ============================================================
+# Model assumption checks (DHARMa simulation-based residuals)
+# ============================================================
+gauss_sim <- simulateResiduals(my_glmm_gaussian)
+plot(gauss_sim)                 # OK
+testDispersion(gauss_sim)       # OK
+testUniformity(gauss_sim)       # OK
+testOutliers(gauss_sim)         # OK
+check_singularity(my_glmm_gaussian)   # OK
 
-# Hypothesis: Omnivores increase water column feeding at low tide (positive difference)
-# This tests H0: diff <= 0 vs H1: diff > 0
-omni_water_full <- emmeans(my_glmm_gaussian, 
-                           ~ Environment * substrate * functional,
-                           at = list(substrate = "Water Column", 
-                                     functional = "Omnivore"))
-omni_water_test <- test(omni_water_full, null = 0, side = ">")
+# ============================================================
+# test whether tidal difference != 0
+# ============================================================
+feeding_emm <- emmeans(my_glmm_gaussian,
+                       ~ Environment * substrate * functional)
 
-# All other groups:  no directional hypotheses
-# This tests H0: diff = 0 vs H1: diff ≠ 0
-
-# Get estimated marginal means for all factor combinations
-other_groups <- emmeans(my_glmm_gaussian,
-                        ~ Environment * substrate * functional)
-
-# Perform two-tailed tests against null hypothesis of zero difference
-all_test <- test(other_groups, null = 0, adjust = "Tukey")
-
-# Filter out omnivores to avoid double-testing
-other_test_dataframe <- all_test %>%
-  as.data.frame() %>%
-  filter(functional != "Omnivore")
-
-
-# Get estimated marginal means for all combinations
-all_groups_emmeans <- emmeans(my_glmm_gaussian, 
-                              ~ Environment * substrate * functional,
-                              type = "response")
+feeding_tests <- test(feeding_emm, null = 0, adjust = "fdr") %>%
+  as.data.frame()
 
 ```
 
@@ -1598,33 +1421,14 @@ all_groups_emmeans <- emmeans(my_glmm_gaussian,
 
 ```{r Fig3plot_2}
 
-# Combine all test results into one dataframe
-# Extract omnivore results
-omni_benthic_df <- as.data.frame(omni_benthic_test) %>%
-  mutate(p_final = p.value)  
+sig_results <- feeding_tests %>%
+  mutate(is_sig = p.value < 0.05) %>%
+  select(Environment, substrate, functional, is_sig, p.value)
 
-omni_water_df <- as.data.frame(omni_water_test) %>%
-  mutate(p_final = p.value)  
-
-# Extract other results with two-tailed p-values
-other_df <- as.data.frame(all_test) %>%
-  filter(functional != "Omnivore") %>%  # Remove omnivores to avoid duplication
-  mutate(p_final = p.value) 
-
-# Combine all results
-all_test_results <- rbind(omni_benthic_df, omni_water_df, other_df)
-
-# Create significance results dataframe for joining with plot data
-sig_results <- all_test_results %>%
-  mutate(
-    # Determine significance based on final p-values
-    is_sig = p_final < 0.05
-  ) %>%
-  select(Environment, substrate, functional, is_sig, p_final)
-
-# Join significance results with raw data for individual points
+# Join significance flags onto raw points
 func_groups_sig <- func_groups %>%
   left_join(sig_results, by = c("Environment", "substrate", "functional"))
+
 
 # Create feeding plot 
 # Create base plot with individual data points and summary statistics
@@ -1741,8 +1545,8 @@ Fig3
 
 ## Supplementary Materials
 
-#### Table S7. 
-```{r Table S7}
+#### Table S6. 
+```{r Table S6}
 
 # Identify which species were present at each replicate-tide
 present_species <- all_cam %>%
@@ -1783,50 +1587,45 @@ feed <- species_bite_rates %>%
     .groups = "drop"
   )
 
-# GLMM 
 feed_model <- glmmTMB(
-  bite_rate ~ Environment * functional * Tide + (1|Habitat) , 
+  bite_rate ~ Environment * functional * Tide + (1|Habitat),
   data = feed,
   family = tweedie(link = "log")
-) 
+)
 
+# ============================================================
+# Model assumption checks 
+# Tweedie GLMM: continuous, non-negative, zero-inflated rate data
+# ============================================================
+feed_sim <- simulateResiduals(feed_model)
+plot(feed_sim)                 # OK
+testDispersion(feed_sim)       # OK
+testZeroInflation(feed_sim)    # OK
+testUniformity(feed_sim)       # OK
+check_singularity(feed_model)  # OK
 
-# Get emmeans for SGD comparison, specifically for herbivores, averaged over tides
-sgd_herbivore <- emmeans(feed_model, ~ Environment | functional, type = "response")
-
-# Get the pairwise contrast for herbivores only
-herbivore_sgd_contrast <- pairs(sgd_herbivore) %>%
-  summary() %>%
-  as.data.frame() %>%
-  filter(functional == "Herbivore")
-
-
-# Get emmeans with CIs
-sgd_emmeans_feed <- emmeans(feed_model, ~ Environment | Tide + functional, type = "response")
+# Per-tide SGD vs Ambient contrasts
+sgd_emmeans_feed <- emmeans(feed_model, ~ Environment | Tide + functional,
+                            type = "response")
 sgd_contrasts_feed <- pairs(sgd_emmeans_feed) %>%
-  summary(infer = TRUE)
-
+  summary(infer = TRUE, adjust = "tukey")    
 feed_df <- as.data.frame(sgd_contrasts_feed)
 
-table_S7 <- feed_df %>%
+table_S6 <- feed_df %>%
   mutate(
     Group = paste(functional, Tide, sep = " - "),
-    # Invert ratio to show SGD/Ambient
-    ratio_sgd = 1/ratio,
-    CI_lower = 1/asymp.UCL,
-    CI_upper = 1/asymp.LCL,
+    ratio_sgd = 1/ratio,                 # emmeans gives Ambient/SGD -> invert
+    CI_lower  = 1/asymp.UCL,
+    CI_upper  = 1/asymp.LCL,
     ratio_formatted = sprintf("%.2f", ratio_sgd),
-    CI_formatted = sprintf("[%.2f, %.2f]", CI_lower, CI_upper),
-    SE_formatted = sprintf("%.3f", SE),
-    z_formatted = sprintf("%.2f", abs(z.ratio)),
-    p_formatted = case_when(
-      p.value < 0.001 ~ "< 0.001",
-      TRUE ~ sprintf("%.3f", p.value)
-    ),
-    sig = ifelse(p.value < 0.05, "*", "")
+    CI_formatted    = sprintf("[%.2f, %.2f]", CI_lower, CI_upper),
+    SE_formatted    = sprintf("%.3f", SE),
+    z_formatted     = sprintf("%.2f", abs(z.ratio)),
+    p_formatted = case_when(p.value < 0.001 ~ "< 0.001",
+                            TRUE ~ sprintf("%.3f", p.value))
   ) %>%
-  select(Group, ratio_formatted, CI_formatted, SE_formatted, z_formatted, 
-         df, p_formatted, sig) %>%
+  select(Group, ratio_formatted, CI_formatted, SE_formatted, z_formatted,
+         df, p_formatted) %>%
   rename(
     "Functional Group - Tide" = Group,
     "Ratio (SGD/Amb)" = ratio_formatted,
@@ -1834,92 +1633,44 @@ table_S7 <- feed_df %>%
     "SE" = SE_formatted,
     "z" = z_formatted,
     "df" = df,
-    "P" = p_formatted,
-    " " = sig
+    "P" = p_formatted
   )
 
-caption_S7 <- paste0(
-"Table S7. SGD effects on feeding rates across functional groups and tidal states.\n",
+caption_S6 <- paste0(
+"Table S6. SGD effects on feeding rates across functional groups and tidal states.\n",
 "Tweedie GLMM with log link; random effect: Habitat. Ratios = SGD / Ambient feeding rate.\n",
-"Two-sided tests. * P < 0.05."
+"Two-sided contrasts, Tukey-adjusted."
 )
 
-table_S7_grob <- tableGrob(table_S7, theme = table_theme, rows = NULL)
-title_S7 <- textGrob(caption_S7, x = 0.5, vjust = 0, y = -0.5, 
+table_S6_grob <- tableGrob(table_S6, theme = table_theme, rows = NULL)
+title_S6 <- textGrob(caption_S6, x = 0.5, vjust = 0, y = -0.5,
                      gp = gpar(fontsize = 9, fontface = "italic"))
-final_S7 <- arrangeGrob(title_S7, table_S7_grob, 
+final_S6 <- arrangeGrob(title_S6, table_S6_grob,
                         heights = unit.c(unit(3, "lines"), unit(1, "null")))
 
-png(here("Outputs", "TableS7_updated.png"), width = 11, height = 8, units = "in", res = 300)
-grid.draw(final_S7)
+png(here("Outputs", "TableS6_updated.png"), width = 11, height = 8, units = "in", res = 300)
+grid.draw(final_S6)
 dev.off()
 
-grid.draw(final_S7)
+grid.draw(final_S6)
 
 
 ```
 
 
-#### Table S8.
-```{r TableS8}
-# Bite rate tidal differences 
-
-# Combine all test results into a single data frame
-# Extract omnivore results
-omni_benthic_df <- as.data.frame(omni_benthic_test)
-omni_water_df <- as.data.frame(omni_water_test)
-other_df <- as.data.frame(all_test)
-
-# Remove omnivore results from other_df to avoid duplication
-other_df_filtered <- other_df[other_df$functional != "Omnivore", ]
-
-# Add test type indicator
-omni_benthic_df$test_type <- "one-tailed (<)"
-omni_water_df$test_type <- "one-tailed (>)"
-other_df_filtered$test_type <- "two-tailed"
-
-# Combine all results
-all_results <- rbind(omni_benthic_df, omni_water_df, other_df_filtered)
-
-# Get all emmeans with CIs
-all_groups_emmeans <- emmeans(my_glmm_gaussian, 
+#### Table S7
+```{r TableS7}
+# Estimates + CIs for each cell
+feeding_emmeans_df <- emmeans(my_glmm_gaussian,
                               ~ Environment * substrate * functional) %>%
-  summary(infer = TRUE)
+  summary(infer = TRUE) %>%
+  as.data.frame()
 
-all_emmeans_df <- as.data.frame(all_groups_emmeans)
-
-# Combine with test results (from your original code)
-# Re-run tests to get consistent output
-omni_benthic_full <- emmeans(my_glmm_gaussian, 
-                             ~ Environment * substrate * functional,
-                             at = list(substrate = "Benthos", functional = "Omnivore"))
-omni_benthic_test <- test(omni_benthic_full, null = 0, side = "<") %>%
-  as.data.frame() %>%
-  mutate(test_type = "one-tailed (<)")
-
-omni_water_full <- emmeans(my_glmm_gaussian, 
-                           ~ Environment * substrate * functional,
-                           at = list(substrate = "Water Column", functional = "Omnivore"))
-omni_water_test <- test(omni_water_full, null = 0, side = ">") %>%
-  as.data.frame() %>%
-  mutate(test_type = "one-tailed (>)")
-
-other_test <- test(emmeans(my_glmm_gaussian, ~ Environment * substrate * functional), 
-                   null = 0, adjust = "tukey") %>%
-  as.data.frame() %>%
-  filter(functional != "Omnivore") %>%
-  mutate(test_type = "two-tailed")
-
-all_bite_tests <- bind_rows(omni_benthic_test, omni_water_test, other_test)
-
-# Merge with CI information
-all_emmeans_df <- as.data.frame(summary(emmeans(my_glmm_gaussian, 
-                                                 ~ Environment * substrate * functional),
-                                        infer = TRUE))
-
-table_S8 <- all_bite_tests %>%
-  left_join(all_emmeans_df %>% select(Environment, substrate, functional, lower.CL, upper.CL),
-            by = c("Environment", "substrate", "functional")) %>%
+table_S7 <- feeding_tests %>%
+  left_join(
+    feeding_emmeans_df %>% select(Environment, substrate, functional, lower.CL, upper.CL),
+    by = c("Environment", "substrate", "functional")
+  ) %>%
   mutate(
     Group = paste(functional, substrate, sep = " - "),
     emmean_formatted = sprintf("%.2f", emmean),
@@ -1929,11 +1680,10 @@ table_S8 <- all_bite_tests %>%
     p_formatted = case_when(
       p.value < 0.001 ~ "< 0.001",
       TRUE ~ sprintf("%.3f", p.value)
-    ),
-    sig = ifelse(p.value < 0.05, "*", "")
+    )
   ) %>%
-  select(Environment, Group, emmean_formatted, CI_formatted, SE_formatted, 
-         t_formatted, df, p_formatted, sig) %>%
+  select(Environment, Group, emmean_formatted, CI_formatted, SE_formatted,
+         t_formatted, df, p_formatted) %>%
   arrange(Group, Environment) %>%
   rename(
     "Environment" = Environment,
@@ -1943,34 +1693,33 @@ table_S8 <- all_bite_tests %>%
     "SE" = SE_formatted,
     "t" = t_formatted,
     "df" = df,
-    "P" = p_formatted,
-    " " = sig
+    "P" = p_formatted
   )
 
-caption_S8 <- paste0(
-"Table S8. Tidal differences in bite rates (Low − High tide) by functional group and substrate.\n",
-"Gaussian GLMM; random effects: Habitat, Replicate. Positive values = higher feeding at low tide.\n",
-"One-tailed tests for Omnivores: benthos (H₁: < 0), water column (H₁: > 0); two-tailed for others.\n",
-"* P < 0.05. Colored points in Fig. 3 indicate significant differences from zero."
+caption_S7 <- paste0(
+"Table S7. Tidal differences in bite rates (Low − High tide) by functional group and substrate.\n",
+"Gaussian GLMM with environment-specific dispersion; random effects: Habitat, Replicate.\n",
+"Positive values = higher feeding at low tide. Two-sided tests, FDR-adjusted.\n",
+"Colored points in Fig. 3 indicate significant differences from zero."
 )
 
-table_S8_grob <- tableGrob(table_S8, theme = table_theme, rows = NULL)
-title_S8 <- textGrob(caption_S8, x = 0.5, vjust = 0, y = -0.5, 
+table_S7_grob <- tableGrob(table_S7, theme = table_theme, rows = NULL)
+title_S7 <- textGrob(caption_S7, x = 0.5, vjust = 0, y = -0.5,
                      gp = gpar(fontsize = 9, fontface = "italic"))
-final_S8 <- arrangeGrob(title_S8, table_S8_grob, 
+final_S7 <- arrangeGrob(title_S7, table_S7_grob,
                         heights = unit.c(unit(4, "lines"), unit(1, "null")))
 
-png(here("Outputs", "TableS8_updated.png"), width = 12, height = 12, units = "in", res = 300)
-grid.draw(final_S8)
+png(here("Outputs", "TableS7_updated.png"), width = 12, height = 12, units = "in", res = 300)
+grid.draw(final_S7)
 dev.off()
 
-grid.draw(final_S8)
+grid.draw(final_S7)
 
 ```
 
 # Figure 4
 
-Figure 4. (A) Herbivory rates on Padina boryana (log scale) show significantly higher consumption in SGD environments regardless of algal source, with SGD-sourced algae experiencing greater herbivory than ambient-sourced algae across both environments. (B) Algal nitrogen content was significantly higher in SGD-collected P. boryana specimens compared to ambient specimens. (C) δ15N values were significantly higher in SGD-collected P. boryana specimens compared to ambient specimens. Points represent individual algal assays or specimens with means ± SE shown.
+(a) Herbivory rates on Padina boryana across SGD and ambient environments for algae sourced from each environment (Tweedie generalized linear mixed model [GLMM], two-sided tests; Table S8). (b) Algal nitrogen content (%) and (c) δ¹⁵N of P. boryana from ambient and SGD environments (Gamma GLM, two-sided tests; Table S9). Points are individual algal assays (a) or specimens (b,c); symbols show means ± SE and letters indicate significant differences (p < 0.05). Graphic elements created using Canva and Microsoft PowerPoint.
 
 ## Plotting
 
@@ -2211,53 +1960,67 @@ Fig4
 ```{r Fig4Stats}
 
 # Fit Tweedie GLMM with log link
+# tweedie_model <- glmmTMB(
+#   consumed ~ source * environment + (1|habitat) + (1|date),
+#   data = herb_assay, family = tweedie(link = "log")
+# )
+# 
+# herb_sim <- simulateResiduals(tweedie_model)
+# testDispersion(herb_sim) #OK
+# testZeroInflation(herb_sim)  #OK
+# testUniformity(herb_sim) #OK
+# check_singularity(tweedie_model) # fail
+
+#VarCorr(tweedie_model)  
+
 tweedie_model <- glmmTMB(
-  consumed ~ source * environment + (1|habitat) + (1|date), 
-  data = herb_assay,
-  family = tweedie(link = "log")
+  consumed ~ source * environment + (1|habitat),   # date dropped
+  data = herb_assay, family = tweedie(link = "log")
 )
 
+herb_sim <- simulateResiduals(tweedie_model)
+testDispersion(herb_sim) #OK
+testZeroInflation(herb_sim)  #OK
+testUniformity(herb_sim) #OK
+check_singularity(tweedie_model) # OK
 
 # Test Delta 15N differences between SGD and ambient environments
-# Gamma GLM appropriate for positive, right-skewed isotope data
-p_delN_gamma_model <- glm(
-  del15N ~ Environment,
-  data = padina,
-  family = Gamma(link = "log")
-)
+# δ15N: SGD vs ambient (two-sided)
+p_delN_gamma_model <- glm(del15N ~ Environment, data = padina, family = Gamma(link = "log"))
 
-# One-tailed test: H0: Ambient >= SGD, H1: Ambient < SGD
-# Testing if SGD environments have higher (enriched) delta 15N values
+delN_sim <- simulateResiduals(p_delN_gamma_model)
+testDispersion(delN_sim) #OK
+testUniformity(delN_sim)  #OK
+testOutliers(delN_sim) #OK
+
 del_contrast <- emmeans(p_delN_gamma_model, ~ Environment, type = "response") %>%
-  pairs(side = "<")  # Left-tailed: Ambient - SGD < 0
-del_contrast
+  pairs()             
 
-# Test Percent nitrogen differences between SGD and ambient environments
-# Gamma GLM for positive, right-skewed percent data
-p_percentN_gamma_model <- glm(
-  percent_N ~ Environment,
-  data = padina,
-  family = Gamma(link = "log")
-)
+# Percent N: SGD vs ambient
+p_percentN_gamma_model <- glm(percent_N ~ Environment, 
+                              data = padina, 
+                              family = Gamma(link = "log"))
 
-# One-tailed test: H0: Ambient >= SGD, H1: Ambient < SGD
-# Testing if SGD environments have higher tissue nitrogen content
+percentN_sim <- simulateResiduals(p_percentN_gamma_model)
+testDispersion(percentN_sim) #OK
+testUniformity(percentN_sim)   # OK
+testOutliers(percentN_sim) # OK
+
 percentN_contrast <- emmeans(p_percentN_gamma_model, ~ Environment, type = "response") %>%
-  pairs(side = "<")  # Left-tailed: Ambient - SGD < 0
+  pairs()                     
 
 
 ```
 
 ## Supplemental Materials
 
-### Table S9
-```{r Table S9}
+### Table S8
+```{r Table S8}
 
 # extract coefficients table from model summary
 herbivory_summary <- summary(tweedie_model)
 model_coeffs <- herbivory_summary$coefficients$cond
 
-# convert to data frame preserving column names
 model_coeffs_df <- data.frame(
   Term = rownames(model_coeffs),
   Estimate = model_coeffs[, 1],
@@ -2265,18 +2028,13 @@ model_coeffs_df <- data.frame(
   z_value = model_coeffs[, 3],
   p_value = model_coeffs[, 4],
   row.names = NULL
-)
-
-# get confidence intervals
-# for glmmTMB, calculate Wald CIs manually: estimate ± 1.96 * SE
-model_coeffs_df <- model_coeffs_df %>%
+) %>%
   mutate(
     CI_lower = Estimate - 1.96 * SE,
     CI_upper = Estimate + 1.96 * SE
   )
 
-# format for table
-table_S9 <- model_coeffs_df %>%
+table_S8 <- model_coeffs_df %>%
   mutate(
     Estimate_formatted = sprintf("%.3f", Estimate),
     CI_formatted = sprintf("[%.3f, %.3f]", CI_lower, CI_upper),
@@ -2297,11 +2055,66 @@ table_S9 <- model_coeffs_df %>%
     "P" = p_formatted
   )
 
-# create and save table
+caption_S8 <- paste0(
+  "Table S8. Herbivory model coefficients.\n",
+  "Tweedie GLMM with log link; random effect: habitat.\n",
+  "Model: consumed ~ source × environment + (1|habitat). Two-sided Wald tests."
+)
+
+table_S8_grob <- tableGrob(table_S8, theme = table_theme, rows = NULL)
+title_S8 <- textGrob(caption_S8, x = 0.5, vjust = 0, y = -0.5,
+                     gp = gpar(fontsize = 9, fontface = "italic"))
+final_S8 <- arrangeGrob(title_S8, table_S8_grob,
+                        heights = unit.c(unit(4, "lines"), unit(1, "null")))
+
+png(here("Outputs", "TableS8_updated.png"), width = 10, height = 5, units = "in", res = 300)
+grid.draw(final_S8)
+dev.off()
+
+grid.draw(final_S8)
+
+```
+
+### Table S9
+```{r TableS9}
+del_contrast <- emmeans(p_delN_gamma_model, ~ Environment, type = "response") %>%
+  pairs() %>% summary(infer = TRUE)          # two-sided, CIs + p in one call
+
+percentN_contrast <- emmeans(p_percentN_gamma_model, ~ Environment, type = "response") %>%
+  pairs() %>% summary(infer = TRUE)
+
+del_df  <- as.data.frame(del_contrast)  %>% mutate(Parameter = "δ15N (‰)")
+pctN_df <- as.data.frame(percentN_contrast) %>% mutate(Parameter = "Nitrogen (%)")
+
+del_resid_df  <- df.residual(p_delN_gamma_model)
+pctN_resid_df <- df.residual(p_percentN_gamma_model)
+
+table_S9 <- bind_rows(del_df, pctN_df) %>%
+  mutate(
+    ratio_sgd = 1/ratio,                 # invert to SGD/Ambient
+    CI_lower  = 1/upper.CL,
+    CI_upper  = 1/lower.CL,
+    percent_increase = sprintf("%.0f%%", (ratio_sgd - 1) * 100),
+    ratio_formatted  = sprintf("%.3f", ratio_sgd),
+    CI_formatted     = sprintf("[%.3f, %.3f]", CI_lower, CI_upper),
+    SE_formatted     = sprintf("%.3f", SE),
+    t_formatted      = sprintf("%.2f", abs(t.ratio)),
+    df_value = ifelse(Parameter == "δ15N (‰)", del_resid_df, pctN_resid_df),
+    p_formatted = case_when(p.value < 0.001 ~ "< 0.001",
+                            TRUE ~ sprintf("%.3f", p.value))
+  ) %>%
+  select(Parameter, ratio_formatted, CI_formatted, percent_increase, SE_formatted,
+         t_formatted, df_value, p_formatted) %>%
+  rename(
+    "Parameter" = Parameter, "Ratio (SGD/Amb)" = ratio_formatted,
+    "95% CI" = CI_formatted, "SGD Increase" = percent_increase,
+    "SE" = SE_formatted, "t" = t_formatted, "df" = df_value, "P" = p_formatted
+  )
+
 caption_S9 <- paste0(
-  "Table S9. Herbivory model coefficients.\n",
-  "Tweedie GLMM with log link; random effects: habitat, date.\n",
-  "Model: consumed ~ source × environment + (1|habitat) + (1|date)."
+  "Table S9. Padina boryana nutrient content: SGD vs Ambient environments.\n",
+  "Gamma GLMs with log link. Two-sided tests; n = 5 per environment.\n",
+  "Ratios > 1 indicate higher values in SGD. Letters in Fig. 4B-C correspond to these contrasts."
 )
 
 table_S9_grob <- tableGrob(table_S9, theme = table_theme, rows = NULL)
@@ -2309,102 +2122,10 @@ title_S9 <- textGrob(caption_S9, x = 0.5, vjust = 0, y = -0.5,
                      gp = gpar(fontsize = 9, fontface = "italic"))
 final_S9 <- arrangeGrob(title_S9, table_S9_grob, 
                         heights = unit.c(unit(4, "lines"), unit(1, "null")))
-
 png(here("Outputs", "TableS9_updated.png"), width = 10, height = 5, units = "in", res = 300)
 grid.draw(final_S9)
 dev.off()
-
 grid.draw(final_S9)
-
-```
-
-### Table S10
-```{r TableS10}
-
-# Get CIs
-del_contrast_twosided <- emmeans(p_delN_gamma_model, ~ Environment, type = "response") %>%
-  pairs() %>%
-  summary(infer = TRUE)
-
-percentN_contrast_twosided <- emmeans(p_percentN_gamma_model, ~ Environment, type = "response") %>%
-  pairs() %>%
-  summary(infer = TRUE)
-
-# Get p-values 
-del_contrast_onesided <- emmeans(p_delN_gamma_model, ~ Environment, type = "response") %>%
-  pairs(side = "<") %>%
-  summary()
-
-percentN_contrast_onesided <- emmeans(p_percentN_gamma_model, ~ Environment, type = "response") %>%
-  pairs(side = "<") %>%
-  summary()
-
-# Combine CIs and p-values
-del_df <- as.data.frame(del_contrast_twosided) %>%
-  mutate(
-    Parameter = "δ15N (‰)",
-    p.value = as.data.frame(del_contrast_onesided)$p.value  # Replace with one-sided p
-  )
-
-pctN_df <- as.data.frame(percentN_contrast_twosided) %>%
-  mutate(
-    Parameter = "Nitrogen (%)",
-    p.value = as.data.frame(percentN_contrast_onesided)$p.value  # Replace with one-sided p
-  )
-
-# Get residual df from GLMs
-del_resid_df <- df.residual(p_delN_gamma_model)
-pctN_resid_df <- df.residual(p_percentN_gamma_model)
-
-# build table
-table_S10 <- bind_rows(del_df, pctN_df) %>%
-  mutate(
-    # Invert to show SGD/Ambient
-    ratio_sgd = 1/ratio,
-    CI_lower = 1/upper.CL,
-    CI_upper = 1/lower.CL,
-    percent_increase = sprintf("%.0f%%", (ratio_sgd - 1) * 100),
-    ratio_formatted = sprintf("%.3f", ratio_sgd),
-    CI_formatted = sprintf("[%.3f, %.3f]", CI_lower, CI_upper),
-    SE_formatted = sprintf("%.3f", SE),
-    t_formatted = sprintf("%.2f", abs(t.ratio)),
-    df_value = ifelse(Parameter == "δ15N (‰)", del_resid_df, pctN_resid_df),
-    p_formatted = case_when(
-      p.value < 0.001 ~ "< 0.001",
-      TRUE ~ sprintf("%.3f", p.value)
-    )
-  ) %>%
-  select(Parameter, ratio_formatted, CI_formatted, percent_increase, SE_formatted, 
-         t_formatted, df_value, p_formatted) %>%
-  rename(
-    "Parameter" = Parameter,
-    "Ratio (SGD/Amb)" = ratio_formatted,
-    "95% CI" = CI_formatted,
-    "SGD Increase" = percent_increase,
-    "SE" = SE_formatted,
-    "t" = t_formatted,
-    "df" = df_value,
-    "P" = p_formatted
-  )
-
-caption_S10 <- paste0(
-  "Table S10. Padina boryana nutrient content: SGD vs Ambient environments.\n",
-  "Gamma GLMs with log link. One-sided tests (H₁: SGD > Ambient); two-sided 95% CIs.\n",
-  "Ratios > 1 indicate higher values in SGD. Significance assertions in Fig. 4B-C derived from these contrasts."
-)
-
-table_S10_grob <- tableGrob(table_S10, theme = table_theme, rows = NULL)
-title_S10 <- textGrob(caption_S10, x = 0.5, vjust = 0, y = -0.5, 
-                      gp = gpar(fontsize = 9, fontface = "italic"))
-final_S10 <- arrangeGrob(title_S10, table_S10_grob, 
-                         heights = unit.c(unit(3, "lines"), unit(1, "null")))
-
-png(here("Outputs", "TableS10_updated.png"), width = 11, height = 4, units = "in", res = 300)
-grid.draw(final_S10)
-dev.off()
-
-grid.draw(final_S10)
-
 ```
 
 
