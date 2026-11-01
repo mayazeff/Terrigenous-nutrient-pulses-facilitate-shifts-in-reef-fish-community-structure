@@ -1,27 +1,18 @@
----
-title: Terrigenous nutrient pulses facilitate shifts in reef fish community structure
-  and feeding through trophic plasticity
-author: "Maya Zeff"
-date: "2025-11-13"
-output: html_document
----
-
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(
-  echo = TRUE,        # Show code
-  eval = TRUE,        # Run code
-  message = FALSE,    # Hide messages
-  warning = FALSE,    # Hide warnings
-  error = FALSE,      # Don't show errors (stops knitting on error)
-  results = 'hide',   # Hide printed output
-  fig.show = 'asis'    # Show figures
+  echo     = TRUE,    # Show code
+  eval     = TRUE,    # Run code
+  message  = FALSE,   # Hide messages
+  warning  = FALSE,   # Hide warnings
+  error    = FALSE,   # Don't show errors (stops knitting on error)
+  results  = 'hide',  # Hide printed output
+  fig.show = 'asis'   # Show figures
 )
 ```
 
-
 # Load packages
 
-``` {r LOADPACKAGES}
+```{r LOADPACKAGES}
 # ensure pacman is installed
 if (!require("pacman")) install.packages("pacman")
 
@@ -29,36 +20,33 @@ if (!require("pacman")) install.packages("pacman")
 pacman::p_load(
   dplyr, tidyr, tibble, stringr,
   # Visualization
-  ggplot2, 
-  ggtext, 
-  cowplot, ggpubr, gridExtra, 
-  grid, 
-  statmod,
+  ggplot2,
+  ggtext,
+  cowplot, ggpubr, gridExtra,
+  grid,
+  sf,
+  geodata,
+  colorspace,
   # Statistics
-  MASS, lme4, 
-  rstatix,
-  emmeans, 
-  nlme,
-  glmmTMB, 
+  lme4,
+  emmeans,
+  glmmTMB,
   performance,
   DHARMa,
   # Interactive viz
   # Project management
-  here, report 
+  here, report
 )
 
 # create an 'Outputs' directory if one does not exist to save images
 if (!dir.exists(here("Outputs"))) {
   dir.create(here("Outputs"))
 }
-
-
 ```
 
 # Read in data
 
 ```{r ReadData}
-
 # Set seed for reproducibility
 set.seed(123)
 
@@ -70,53 +58,53 @@ read_data <- function(file_name) {
 # Load functional groupings data
 functional_group <- read_data("species_functional.csv")
 
-# Load camera survey data and preprocess 
+# Load camera survey data and preprocess
 all_cam <- read_data("video_surveys.csv") %>%
   mutate(
-    # Standardize tide levels 
+    # Standardize tide levels
     Tide = as.factor(case_when(
       Tide == "High" ~ "High Tide",
-      Tide == "Low" ~ "Low Tide"
+      Tide == "Low"  ~ "Low Tide"
     )),
     # Group substrates into broader categories
     substrate = as.factor(case_when(
       Substrate %in% c("turbinaria", "coral", "turf", "sand", "macroalgae") ~ "Benthos",
       Substrate == "plankton" ~ "Water Column"
-    )),
+    ))
   ) %>%
   # Merge with functional group data based on species codes
-  mutate(code = Code) %>% 
+  mutate(code = Code) %>%
   left_join(functional_group, by = 'code') %>%
   # remove highly mobile species
-  filter(!family %in% c("Carangidae", "Carcharhinidae", "Beloniformes")) %>% 
+  filter(!family %in% c("Carangidae", "Carcharhinidae", "Beloniformes")) %>%
   # Remove piscivores due to insufficient observations (n < 3 individuals total)
   filter(functional != "Piscivore")
 
-
-# Load herbivory assay data and preprocess 
+# Load herbivory assay data and preprocess
 assay <- read_data("herbivory_assay.csv") %>%
   # calculate amount consumed
-  mutate(diff = Pre_algae_g-Post_algae_g ) %>%
-  # split Group column 
+  mutate(diff = Pre_algae_g - Post_algae_g) %>%
+  # split Group column
   separate(col = Group, into = c("habitat", "environment"), sep = "(?<=Reef|Sand)") %>%
   # rename columns
-  mutate(source = as.factor(Source),
-         cage = as.factor(Place),
-         date = factor(Date,     
-                       levels = c("19/7/2022", "29/6/2022"),
+  mutate(
+    source    = as.factor(Source),
+    cage      = as.factor(Place),
+    date      = factor(Date,
+                       levels = c("1/7/22", "2/7/22"),
                        labels = c("Day1", "Day2")),
-         replicate = as.factor(Replicate)) %>%
+    replicate = as.factor(Replicate)
+  ) %>%
   # select desired
   dplyr::select(date, habitat, environment, replicate, source, cage, diff)
 
-
 # Load site selection salinity & pH data
-carb_chem <- read_data("water_chemistry.csv") %>%  
-  as_tibble() %>% 
+carb_chem <- read_data("water_chemistry.csv") %>%
+  as_tibble() %>%
   # rename sampling times to day/night and high tide/low tide
   mutate(
-    Environment = str_replace(Environment, "SGD", "SGD Environment"),
-    Environment = str_replace(Environment ,"Ambient","Ambient Environment"),
+    Environment  = str_replace(Environment, "SGD", "SGD Environment"),
+    Environment  = str_replace(Environment, "Ambient", "Ambient Environment"),
     SamplingTime = str_replace(SamplingTime, "08:00", "Day Low Tide"),
     SamplingTime = str_replace(SamplingTime, "14:00", "Day High Tide"),
     SamplingTime = str_replace(SamplingTime, "20:00", "Night Low Tide"),
@@ -126,7 +114,7 @@ carb_chem <- read_data("water_chemistry.csv") %>%
   mutate(
     # rename tidal states
     Tide = case_when(
-      Tide == "Low" ~ "Low Tide", 
+      Tide == "Low"  ~ "Low Tide",
       Tide == "High" ~ "High Tide"
     ),
     # rename habitats
@@ -136,7 +124,7 @@ carb_chem <- read_data("water_chemistry.csv") %>%
     ),
     # turn columns into factors and relevel if necessary for plotting
     Environment = factor(Environment, levels = c("SGD Environment", "Ambient Environment")),
-    
+
     # create facet group of habitat & SGD environment
     Facet_Group = paste(Habitat, Environment, sep = " "),
     # set order for group levels
@@ -153,262 +141,291 @@ carb_chem <- read_data("water_chemistry.csv") %>%
 
 # Load Turbinaria ornata nutrient data
 turbinaria <- read_data("turbinaria_nutrients.csv") %>%
-  # Convert nitrogen measurements to percent content
-  mutate(percent_N = (ug_N / weight_mg) * 0.1,
-         # Standardize SGD treatment labels
-         Environment = str_replace(Environment, "SGD", "SGD Environment"),
-         Environment = str_replace(Environment ,"Ambient","Ambient Environment"))
+  mutate(
+    # Convert nitrogen measurements to percent content
+    percent_N   = (ug_N / weight_mg) * 0.1,
+    # Standardize SGD treatment labels
+    Environment = str_replace(Environment, "SGD", "SGD Environment"),
+    Environment = str_replace(Environment, "Ambient", "Ambient Environment")
+  )
 
 # Load Padina boryana nutrient data
 padina <- read_data("padina_nutrients.csv") %>%
-  # Convert nitrogen measurements to percent content
-  mutate(percent_N = (ug_N / weight_mg) * 0.1,
-         # Standardize SGD treatment labels
-         Environment = str_replace(Environment, "SGD", "SGD Environment"),
-         Environment = str_replace(Environment ,"Ambient","Ambient Environment")) 
-
+  mutate(
+    # Convert nitrogen measurements to percent content
+    percent_N   = (ug_N / weight_mg) * 0.1,
+    # Standardize SGD treatment labels
+    Environment = str_replace(Environment, "SGD", "SGD Environment"),
+    Environment = str_replace(Environment, "Ambient", "Ambient Environment")
+  )
 ```
 
 # Figure styling
 
 ```{r FigureStyle}
-
 # Set colors
-ambient_color <- "steelblue"
-sgd_color <- "darkolivegreen"
+ambient_color <- "#0072B2"
+sgd_color     <- "darkgreen"
 
-# Define consistent table theme
+# check colorblind visibility
+# pal <- c("#0072B2", "darkgreen")
+#
+# png(here("Outputs", "color_check.png"), width = 6, height = 4, units = "in", res = 200)
+# swatchplot(
+#   "Normal"       = pal,
+#   "Deuteranopia" = deutan(pal),
+#   "Protanopia"   = protan(pal),
+#   "Tritanopia"   = tritan(pal),
+#   "Grayscale"    = desaturate(pal)
+# )
+# dev.off()
+#
+# system(paste("open", shQuote(here("Outputs", "color_check.png"))))
+
+# ---- Figure theme (ggplot) ----
+base_font <- 16
+
+theme_meps <- function(base = base_font) {
+  theme_bw(base_size = base) +
+    theme(
+      axis.text        = element_text(size = rel(0.9), colour = "black"),
+      axis.title       = element_text(size = rel(1)),
+      strip.text       = element_text(size = rel(1), face = "bold"),
+      strip.background = element_rect(fill = "white", colour = NA),
+      legend.text      = element_text(size = rel(0.9)),
+      legend.title     = element_blank(),
+      plot.title       = element_text(size = rel(1.1), face = "bold", hjust = 0.5)
+    )
+}
+
+# Panel letters (A, B, C) in ggarrange
+panel_label <- list(size = base_font + 4, face = "bold")
+
+# ---- Table theme (supplementary tables, gridExtra) ----
 table_theme <- ttheme_default(
   core = list(
-    # Body text size
-    fg_params = list(fontsize = 10),            
-    # Alternating row colors for readability
-    bg_params = list(fill = c("white", "grey95"))      
+    fg_params = list(fontsize = 10),
+    bg_params = list(fill = c("white", "grey95"))
   ),
   colhead = list(
-    # Header text: larger and bold
-    fg_params = list(fontsize = 11, fontface = "bold"), 
-    # Header background: darker grey
-    bg_params = list(fill = "grey85")                  
+    fg_params = list(fontsize = 11, fontface = "bold"),
+    bg_params = list(fill = "grey85")
   )
 )
 
+# table helper
+save_table <- function(grob, file, pad = 0.2) {
+  w <- convertWidth(sum(grob$widths), "in", valueOnly = TRUE) + pad
+  h <- convertHeight(sum(grob$heights), "in", valueOnly = TRUE) + pad
+  png(here("Outputs", file), width = w, height = h, units = "in", res = 300)
+  grid.draw(grob)
+  dev.off()
+}
 ```
 
 # Figure 1.
 
-Fig. 1. (a) Map of Moʻorea showing study location and (b) experimental site configuration with submarine groundwater discharge (SGD)-influenced sites positioned down-current of the groundwater seep (black circle) and ambient sites up-current. (c) Underwater camera deployment for fish community surveys and (d) herbivory assay setup showing paired Padina boryana specimens in mesh enclosures. (e,f) Mean salinity (± SE) across tidal cycles in SGD and ambient environments; letters indicate significant tidal differences within each environment (Gaussian linear mixed model, two-sided contrasts, p < 0.05; Table S1). (g) Mean nitrogen content (% ± SE) of Turbinaria ornata from ambient and SGD environments; letters indicate a significant difference between environments (Gamma generalized linear model, two-sided test, p < 0.05; Table S2). Graphic elements created using Canva and Microsoft PowerPoint.
-
-
-
 ## Plotting
 
-Sub-plots A and B were made in ArcGIS and compiled with photographs (C,D) and the following plots (E, F) using Canva.
+### Fig. 1, Subplot A
+
+```{r Fig1A}
+# planar geometry
+sf_use_s2(FALSE)
+
+# Download French Polynesia outline
+pyf    <- geodata::gadm("PYF", level = 0, path = here("Data")) %>% st_as_sf()
+moorea <- st_crop(pyf,
+                  xmin = -150.00, xmax = -149.70,
+                  ymin = -17.65,  ymax = -17.42)
+
+# General study location
+study_site <- data.frame(lon = -149.90, lat = -17.54)
+
+# ---- Scale bar ----
+km_to_deg <- 1 / (111.32 * cos(17.53 * pi / 180))
+sb_x0     <- -149.84
+sb_y0     <- -17.615
+sb_h      <- 0.003
+breaks_km <- c(0, 1, 2, 4)
+
+scale_bar <- data.frame(
+  xmin = sb_x0 + head(breaks_km, -1) * km_to_deg,
+  xmax = sb_x0 + breaks_km[-1] * km_to_deg,
+  fill = rep(c("black", "white"), length.out = length(breaks_km) - 1)
+)
+
+# ---- North arrow ----
+na_x     <- -149.755
+na_y     <- -17.615
+na_h     <- 0.017
+na_w     <- 0.004
+na_notch <- 0.004
+
+north_arrow <- data.frame(
+  x    = c(na_x, na_x - na_w, na_x,            na_x, na_x + na_w, na_x),
+  y    = c(na_y + na_h, na_y, na_y + na_notch, na_y + na_h, na_y, na_y + na_notch),
+  half = rep(c("left", "right"), each = 3)
+)
+
+label_size <- base_font * 0.55 / .pt
+
+Fig1A <- ggplot() +
+  geom_sf(data = moorea, fill = "grey80", colour = "grey30", linewidth = 0.3) +
+  geom_point(data = study_site, aes(lon, lat),
+             shape = 21, size = 4, fill = "black", colour = "white", stroke = 1) +
+  # Scale bar segments
+  geom_rect(data = scale_bar,
+            aes(xmin = xmin, xmax = xmax, ymin = sb_y0, ymax = sb_y0 + sb_h, fill = fill),
+            colour = "black", linewidth = 0.3) +
+  scale_fill_identity() +
+  annotate("text", x = sb_x0 + breaks_km * km_to_deg, y = sb_y0 + sb_h + 0.003,
+           label = breaks_km, vjust = 0, size = label_size) +
+  annotate("text", x = sb_x0 + max(breaks_km) * km_to_deg + 0.002, y = sb_y0 + sb_h / 2,
+           label = "Km", hjust = 0, size = label_size) +
+  # North arrow
+  geom_polygon(data = north_arrow,
+               aes(x, y, group = half, fill = I(ifelse(half == "left", "black", "white"))),
+               colour = "black", linewidth = 0.3) +
+  annotate("text", x = na_x, y = na_y + na_h + 0.003, label = "N",
+           vjust = 0, size = label_size * 1.2) +
+  coord_sf(xlim = c(-149.97, -149.73), ylim = c(-17.63, -17.45), expand = FALSE) +
+  scale_x_continuous(breaks = seq(-149.9, -149.8, by = 0.1)) +
+  scale_y_continuous(breaks = seq(-17.6, -17.5, by = 0.1)) +
+  labs(x = NULL, y = NULL) +
+  theme_meps() +
+  theme(
+    panel.grid   = element_blank(),
+    panel.border = element_blank(),
+    axis.text    = element_text(size = rel(0.5))
+  )
+
+ggsave(here("Outputs", "Fig1A.png"), Fig1A, width = 4, height = 3.5, dpi = 600)
+```
 
 ### Fig. 1, Subplots E & F
-```{r Fig1Salinity}
 
-# Calculate summary statistics for plot layers
+```{r Fig1Salinity}
 salinity_summary <- carb_chem %>%
   group_by(Environment, Tide) %>%
   summarize(
     mean_salinity = mean(Salinity, na.rm = TRUE),
-    se_salinity = sd(Salinity, na.rm = TRUE) / sqrt(n()),
-    .groups = "drop"
+    se_salinity   = sd(Salinity, na.rm = TRUE) / sqrt(n()),
+    .groups       = "drop"
   )
 
-# Generate main figure
-Fig1EF <- carb_chem %>%
-  ggplot() +
-  
-  # Display individual observations with horizontal jitter to reduce overplotting
-  geom_jitter(
-    aes(x = Tide, y = Salinity, color = Environment),
-    width = 0.2,      # Jitter width for x-axis separation
-    alpha = 0.5       # Transparency to show overlapping points
-  ) +
-  
-  # Overlay group means as solid points
-  geom_point(
-    data = salinity_summary,
-    aes(x = Tide, y = mean_salinity, color = Environment),
-    size = 2.5        # Larger size to distinguish from raw data
-  ) +
-  
-  # Add standard error bars around means
-  geom_errorbar(
-    data = salinity_summary,
-    aes(x = Tide, 
-        ymin = mean_salinity - se_salinity,
-        ymax = mean_salinity + se_salinity,
-        color = Environment),
-    width = 0.1       # Horizontal cap width
-  ) +
-  
-  # Apply project color scheme
-  scale_color_manual(
-    values = c(
-      "SGD Environment" = sgd_color,
-      "Ambient Environment" = ambient_color
-    )
-  ) +
-  
-  # Create side-by-side panels for direct comparison
-  facet_wrap(
-    ~Environment, 
-    nrow = 1,
-    labeller = labeller(
-      Environment = c(
-        "SGD Environment" = "SGD Salinity",
-        "Ambient Environment" = "Ambient Salinity"
-      )
-    )
-  ) +
-  
-  # Format axes and labels
-  labs(
-    x = "", 
-    y = "Mean Salinity (psu) ± SE"
-  ) +
-  
-  # Apply theme
-  theme_bw() +
+Fig1EF <- ggplot(carb_chem, aes(x = Tide, colour = Environment)) +
+  # individual water samples
+  geom_point(aes(y = Salinity), alpha = 0.25,
+             position = position_jitter(width = 0.2, height = 0, seed = 123)) +
+  # raw means
+  geom_point(data = salinity_summary, aes(y = mean_salinity), size = 2.5) +
+  # ± SE
+  geom_errorbar(data = salinity_summary,
+                aes(ymin = mean_salinity - se_salinity,
+                    ymax = mean_salinity + se_salinity),
+                width = 0.1) +
+  scale_colour_manual(values = c("SGD Environment"     = sgd_color,
+                                 "Ambient Environment" = ambient_color)) +
+  facet_wrap(~ Environment, nrow = 1,
+             labeller = labeller(Environment = c("SGD Environment"     = "SGD Salinity",
+                                                 "Ambient Environment" = "Ambient Salinity"))) +
+  labs(x = NULL, y = "Salinity (psu)") +
+  theme_meps(base = 12) +
   theme(
-    legend.position = "none",          # Remove redundant legend
-    strip.background = element_rect(   # Clean panel headers
-      fill = "white", 
-      color = NA
-    ),
-    strip.text = element_text(         # Emphasize panel labels
-      face = "bold"
-    ),
-    axis.text.x = element_text(        # Enhance readability
-      size = 9
-    )
-  ) 
+    legend.position = "none",
+    aspect.ratio    = 0.9,
+    strip.clip      = "off"
+  )
 
 Fig1EF
 
-# Export figure
-ggsave(
-  filename = here("Outputs", "Fig1EF.png"),
-  plot = Fig1EF,
-  width = 4,
-  height = 2.5,
-  dpi = 500       
-)                  
+ggsave(here("Outputs", "Fig1EF.png"), Fig1EF,
+       width = 4, height = 2.5, dpi = 500)
 ```
 
 ### Fig. 1, Subplot G
-```{r Fig1Nutrients}
 
-# Calculate summary statistics for nitrogen content by environment
-turbinaria_summary <- turbinaria %>% 
+```{r Fig1G}
+# Raw means
+turbinaria_summary <- turbinaria %>%
   group_by(Environment) %>%
   summarize(
-    mean_percentN = mean(percent_N),
-    se_percentN = sd(percent_N) / sqrt(n()),      
+    mean_N  = mean(percent_N, na.rm = TRUE),
+    sd_N    = sd(percent_N, na.rm = TRUE),
+    se_N    = sd_N / sqrt(n()),
     .groups = "drop"
   )
 
-# Generate nitrogen content comparison figure
-Fig1G <- ggplot(
-  data = turbinaria, 
-  aes(x = Environment, y = percent_N, color = Environment)
-) +
-  
-  # Display individual macroalgal samples with horizontal jitter
-  geom_jitter(
-    alpha = 0.5, 
-    position = position_dodge(width = 0.3), # Prevent overplotting
-    size = 2  
-  ) +
-  
-  # Overlay environment means as larger points
-  geom_point(
-    data = turbinaria_summary, 
-    aes(x = Environment, y = mean_percentN),
-    size = 2.5    # Distinguish means from raw data
-  ) +
-  
-  # Add standard error bars to show uncertainty
-  geom_errorbar(
-    data = turbinaria_summary, 
-    aes(x = Environment,
-        y = mean_percentN,
-        ymin = mean_percentN - se_percentN,
-        ymax = mean_percentN + se_percentN),
-    width = 0.1  # Error bar cap width
-  ) +
-  
-  # Apply project color scheme 
-  scale_color_manual(
-    values = c(
-      "SGD Environment" = sgd_color,
-      "Ambient Environment" = ambient_color
-    )
-  ) +
-  
-  # Format axes with appropriate expansion for visual clarity
-  scale_y_continuous(
-    expand = expansion(mult = c(0.05, 0.05))       # 5% padding on both ends
-  ) +
-  
-  # Label axes and add descriptive title
-  labs(
-    x = "",                                        # Remove x-axis label 
-    y = "Mean % Nitrogen Content ± SE", 
-    title = "Algal Nitrogen Content"               # Centered title acts as panel label
-  ) +
-  
-  # Apply publication-ready theme
-  theme_bw() +
+Fig1G <- ggplot(turbinaria, aes(x = Environment, colour = Environment)) +
+  # composite samples
+  geom_point(aes(y = percent_N), alpha = 0.35, size = 2,
+             position = position_jitter(width = 0.08, height = 0, seed = 123)) +
+  # mean ± SE
+  geom_errorbar(data = turbinaria_summary,
+                aes(ymin = mean_N - se_N, ymax = mean_N + se_N),
+                width = 0.1, show.legend = FALSE) +
+  # means
+  geom_point(data = turbinaria_summary, aes(y = mean_N), size = 3.2) +
+  scale_colour_manual(values = c("SGD Environment"     = sgd_color,
+                                 "Ambient Environment" = ambient_color),
+                      guide = "none") +
+  scale_x_discrete(labels = c("Ambient Environment" = "Ambient",
+                              "SGD Environment"     = "SGD")) +
+  scale_y_continuous(expand = expansion(mult = 0.05)) +
+  labs(x     = NULL,
+       y     = "Nitrogen content (%)",
+       title = "Algal Nitrogen Content") +
+  theme_meps(base = 13) +
   theme(
-    legend.position = "none",                      # Remove redundant legend
-    axis.text.x = element_text(size = 9),          # Readable axis labels
-    plot.title = element_text(
-      face = "bold",                               # Emphasize title
-      hjust = 0.5,                                 # Center alignment
-      size = rel(1)                                # Relative size scaling
-    )
+    panel.grid.minor   = element_blank(),
+    panel.grid.major.x = element_blank()
   )
 
 Fig1G
 
-# Export figure
-ggsave(
-  filename = here("Outputs", "Fig1G.png"),
-  plot = Fig1G,
-  width = 3.5,                                     
-  height = 2.5,
-  dpi = 500                                       
-)
-
+ggsave(here("Outputs", "Fig1G.png"), Fig1G,
+       width = 3.5, height = 2.5, dpi = 600)
 ```
-
 
 ## Statistical Analyses
 
 ```{r Fig1Stats}
-
+# ============================================================
 # SALINITY ANALYSIS
+# ============================================================
+
+# ---- Grouping IDs ----
+# Replicate (1-3) repeats across Environment x Habitat;
+# Site = unique physical site (12), each sampled 4 times
+# (high/low tide x day/night)
+carb_chem <- carb_chem %>%
+  mutate(Site = interaction(Environment, Habitat, Replicate, drop = TRUE))
+
+# ---- Random-effects structure selection ----
+salinity_site <- glmmTMB(
+  Salinity ~ Environment * Tide + (1|Habitat) + (1|Site),
+  data = carb_chem
+)
+check_singularity(salinity_site)
+VarCorr(salinity_site)   # habitat SD ~ 0 (0.0003); site SD ~ 2.6 -> drop habitat, keep site
+
 # ---- Model 1: Gamma GLMM ----
 salinity_model <- glmmTMB(
-  Salinity ~ Environment * Tide + (1|Habitat),
-  data = carb_chem,
+  Salinity ~ Environment * Tide + (1|Site),
+  data   = carb_chem,
   family = Gamma(link = "log")
 )
 sim1 <- simulateResiduals(salinity_model, n = 1000)
-plot(sim1)
 
-check_singularity(salinity_model)   # fail
+check_singularity(salinity_model)   # OK
 testUniformity(sim1)$p.value        # fail
 testDispersion(sim1)$p.value        # fail
 testOutliers(sim1)$p.value          # fail
 
 # ---- Model 2: Gaussian, same structure ----
 salinity_gauss <- glmmTMB(
-  Salinity ~ Environment * Tide + (1|Habitat),
+  Salinity ~ Environment * Tide + (1|Site),
   data = carb_chem
 )
 sim2 <- simulateResiduals(salinity_gauss, n = 1000)
@@ -418,12 +435,12 @@ check_singularity(salinity_gauss)   # OK
 testDispersion(sim2)$p.value        # OK
 testUniformity(sim2)$p.value        # fail
 testOutliers(sim2)$p.value          # fail
-
-# Note: uniformity + outlier flags trace to a few genuine low-salinity readings at the seep. Dispersion is satisfied and AIC favors Gaussian. 
-
+testCategorical(sim2, catPred = interaction(carb_chem$Environment, carb_chem$Tide)) 
+# Note: uniformity + outlier flags trace to a few genuine low-salinity readings at the seep.
+# Dispersion is satisfied and AIC favors Gaussian.
 
 # ---- Model comparison ----
-AIC(salinity_model, salinity_gauss) 
+AIC(salinity_model, salinity_gauss)   # Gaussian favored
 
 # ---- Tidal contrasts within each environment (two-sided) ----
 salinity_contrasts <- emmeans(salinity_gauss, ~ Tide | Environment) %>%
@@ -433,53 +450,47 @@ salinity_contrasts <- emmeans(salinity_gauss, ~ Tide | Environment) %>%
 salinity_emm <- emmeans(salinity_gauss, ~ Tide | Environment)
 
 salinity_pct <- as.data.frame(salinity_emm) %>%
-  select(Environment, Tide, emmean) %>%
+  dplyr::select(Environment, Tide, emmean) %>%
   pivot_wider(names_from = Tide, values_from = emmean) %>%
   mutate(
     abs_reduction_PSU = `High Tide` - `Low Tide`,
     pct_reduction     = abs_reduction_PSU / `High Tide` * 100
   )
 
-
-# ------------------------------------
-# ALGAL NITROGEN CONTENT ANALYSIS  
-# ------------------------------------
-
+# ============================================================
+# ALGAL NITROGEN CONTENT ANALYSIS
+# ============================================================
 turbinaria_mixed <- glmer(
-  percent_N ~ Environment + (1|Habitat), 
-  data = turbinaria,
+  percent_N ~ Environment + (1|Habitat),
+  data   = turbinaria,
   family = Gamma(link = "log")
 )
 
 # Random effect variance = 0, simplify to fixed effects model
 turbinaria_model <- glm(
   percent_N ~ Environment,
-  data = turbinaria,
+  data   = turbinaria,
   family = Gamma(link = "log")
 )
 
 # ---- Assumption checks (DHARMa) ----
 sim_turb <- simulateResiduals(turbinaria_model, n = 1000)
-plot(sim_turb)
-
-# p > 0.05 = assumption OK
-testUniformity(sim_turb)$p.value      # OK
-testDispersion(sim_turb)$p.value      # OK
-testOutliers(sim_turb)$p.value        # OK
-plotResiduals(sim_turb, form = turbinaria$Environment)   # OK
+testUniformity(sim_turb)$p.value                          # OK
+testDispersion(sim_turb)$p.value                          # OK
+testOutliers(sim_turb)$p.value                            # OK
+plotResiduals(sim_turb, form = turbinaria$Environment)    # OK
 
 # ---- Environment contrast (two-sided) ----
 nitrogen_contrast <- emmeans(turbinaria_model, ~ Environment) %>%
   pairs()   # single comparison, no multiplicity adjustment
-
 ```
 
 ## Supplemental Materials
 
-### Table S1.
-```{r S1Table}
+### Table S1
 
-# Get two-sided contrasts with CIs and p-values 
+```{r S1Table}
+# Get two-sided contrasts with CIs and p-values
 salinity_contrasts_twosided <- emmeans(salinity_gauss, ~ Tide | Environment) %>%
   pairs(adjust = "tukey") %>%
   summary(infer = TRUE)
@@ -495,47 +506,27 @@ table_S1 <- salinity_contrasts_df %>%
     df_formatted   = sprintf("%.0f", df),
     p_formatted    = case_when(
       p.value < 0.001 ~ "< 0.001",
-      TRUE ~ sprintf("%.3f", p.value)
+      TRUE            ~ sprintf("%.3f", p.value)
     )
   ) %>%
-  select(Environment, contrast, diff_formatted, CI_formatted, SE_formatted,
-         t_formatted, df_formatted, p_formatted) %>%
+  dplyr::select(Environment, contrast, diff_formatted, CI_formatted,
+                t_formatted, df_formatted, p_formatted) %>%
   rename(
-    "Environment" = Environment,
-    "Contrast" = contrast,
+    "Environment"                  = Environment,
+    "Contrast"                     = contrast,
     "Difference (High − Low, PSU)" = diff_formatted,
-    "95% CI" = CI_formatted,
-    "SE" = SE_formatted,
-    "t" = t_formatted,
-    "df" = df_formatted,
-    "P" = p_formatted
+    "95% CI"                       = CI_formatted,
+    "t"                            = t_formatted,
+    "df"                           = df_formatted,
+    "p"                            = p_formatted
   )
 
-caption_S1 <- paste0(
-"Table S1. Planned contrasts testing tidal effects on salinity within each environment.\n",
-"Gaussian linear mixed model with Environment × Tide as fixed effects and Habitat as a random effect.\n",
-"Values are High Tide − Low Tide salinity differences (PSU). Two-sided tests, Tukey-adjusted;\n",
-"degrees of freedom approximated via Kenward-Roger. Letters in Fig. 1E-F correspond to these contrasts."
-)
-
-# Create and save table
 table_S1_grob <- tableGrob(table_S1, theme = table_theme, rows = NULL)
-title_S1 <- textGrob(caption_S1, x = 0.5, vjust = 0, y = -0.5, 
-                     gp = gpar(fontsize = 9, fontface = "italic"))
-final_S1 <- arrangeGrob(title_S1, table_S1_grob, 
-                        heights = unit.c(unit(4, "lines"), unit(1, "null")))
-
-png(here("Outputs", "TableS1_updated.png"), width = 10, height = 4, units = "in", res = 300)
-grid.draw(final_S1)
-dev.off()
-
-# Display inline
-grid.draw(final_S1)
-
+save_table(table_S1_grob, "TableS1.png")
 ```
 
+### Table S2
 
-### Table S2.
 ```{r S2Table}
 nitrogen_contrast <- emmeans(turbinaria_model, ~ Environment) %>%
   pairs() %>%
@@ -547,203 +538,98 @@ nitrogen_df <- summary(nitrogen_contrast, infer = TRUE) %>%
 
 table_S2 <- nitrogen_df %>%
   mutate(
-    ratio        = exp(estimate),       
-    ratio_lower  = exp(lower.CL),
-    ratio_upper  = exp(upper.CL),
-    percent_diff = sprintf("%.1f%%", (1/ratio - 1) * 100),  # SGD increase over Ambient
+    contrast        = "SGD / Ambient",
+    ratio           = exp(-estimate),
+    ratio_lower     = exp(-upper.CL),
+    ratio_upper     = exp(-lower.CL),
     ratio_formatted = sprintf("%.3f", ratio),
     CI_formatted    = sprintf("[%.3f, %.3f]", ratio_lower, ratio_upper),
     SE_formatted    = sprintf("%.3f", SE),
-    t_formatted     = sprintf("%.2f", t.ratio),
-    df_formatted    = sprintf("%.0f", df),  
-    p_formatted = case_when(
+    t_formatted     = sprintf("%.2f", -t.ratio),   # flip sign because the ratio was inverted
+    df_formatted    = sprintf("%.0f", df),
+    p_formatted     = case_when(
       p.value < 0.001 ~ "< 0.001",
-      TRUE ~ sprintf("%.3f", p.value)
+      TRUE            ~ sprintf("%.3f", p.value)
     )
   ) %>%
-  select(contrast, ratio_formatted, CI_formatted, percent_diff, SE_formatted,
-         t_formatted, df_formatted, p_formatted) %>%
+  dplyr::select(contrast, ratio_formatted, CI_formatted,
+                t_formatted, df_formatted, p_formatted) %>%
   rename(
-    "Contrast" = contrast,
-    "Ratio (Amb/SGD)" = ratio_formatted,
-    "95% CI" = CI_formatted,
-    "SGD Increase" = percent_diff,
-    "SE" = SE_formatted,
-    "t" = t_formatted,
-    "df" = df_formatted,
-    "P" = p_formatted
+    "Contrast"        = contrast,
+    "Ratio (SGD/Amb)" = ratio_formatted,
+    "95% CI"          = CI_formatted,
+    "t"               = t_formatted,
+    "df"              = df_formatted,
+    "p"               = p_formatted
   )
 
-caption_S2 <- paste0(
-"Table S2. Planned contrast testing SGD effects on Turbinaria ornata nitrogen content.\n",
-"Gamma GLM with log link. Ratio < 1 (Ambient/SGD) indicates higher nitrogen content at SGD sites.\n",
-"Two-sided test. Letters in Fig. 1G correspond to this contrast."
-)
-
 table_S2_grob <- tableGrob(table_S2, theme = table_theme, rows = NULL)
-title_S2 <- textGrob(caption_S2, x = 0.5, vjust = 0, y = -0.5, 
-                     gp = gpar(fontsize = 9, fontface = "italic"))
-final_S2 <- arrangeGrob(title_S2, table_S2_grob, 
-                        heights = unit.c(unit(3, "lines"), unit(1, "null")))
-
-png(here("Outputs", "TableS2_updated.png"), width = 11, height = 3, units = "in", res = 300)
-grid.draw(final_S2)
-dev.off()
-
-grid.draw(final_S2)
-
+save_table(table_S2_grob, "TableS2.png")
 ```
-
 
 # Figure 2.
 
-Figure 2. (a) Functional group abundance across SGD and ambient environments; points are individual 10 min surveys (circles, high tide; triangles, low tide) and symbols show means ± SE. Letters indicate significant differences between ambient and SGD environments averaged across tidal states; absence of letters indicates no significant difference (negative binomial generalized linear mixed model [GLMM], two-sided contrasts, Tukey-adjusted, p < 0.05; Table S3). (b) Relative abundance of species found exclusively in SGD environments (coloured bars), dominated by omnivorous taxa; species comprising > 5 % of the SGD-unique community are labelled. Grey bars represent species occurring in both environments, shown for reference. (c) Species richness across tidal cycles; points are individual surveys (circles, high tide; triangles, low tide) and symbols show means ± SE. Shared letters indicate no significant difference (negative binomial GLMM, two-sided contrast, p < 0.05; Table S5)
-
 ## Plotting
 
-### Fig. 2, Subplot A
+### Fig. 2 sizing
+
+```{r Fig2Style}
+fig2_base  <- 10                                          # text size (pt) at print size
+fig2_label <- list(size = fig2_base + 2, face = "bold")   # panel letters
+fig2_text  <- fig2_base * 0.9 / .pt                       # geom_text size matching axis text
+```
+
+### Fig. 2 data processing
 
 ```{r Fig2process}
-
 # Summarize functional group abundances for each replicate sample
 funcs <- all_cam %>%
   # Filter for natural activity (i.e. non-feeding) observations only
   filter(Activity == "nat") %>%
-  
+
   # Group by habitat, environment (SGD exposures), tidal state, replicate, functional group, and unique species code
   group_by(Habitat, Environment, Tide, Replicate, functional, code) %>%
-  
+
   # For each unique combination, retain the first observed maximum abundance (nmax)
   summarise(nmax = first(nmax)) %>%
-  
+
   # Collapse across codes to get total abundance for each functional group in each sample
   group_by(Habitat, Environment, Tide, Replicate, functional) %>%
   summarize(total = sum(nmax)) %>%
   ungroup() %>%
-  
+
   # Ensure all combinations are included, filling missing totals with 0
   complete(Habitat, Environment, Tide, Replicate, functional, fill = list(total = 0)) %>%
-  
+
   # Drop rows with any missing values (for example, incomplete replicates)
   drop_na() %>%
-  
+
   # Order functional groups for consistent plotting and analysis
   mutate(
     functional = factor(
       functional,
-      levels = c("Omnivore", "Herbivore", "Invertivore", "Corallivore"),
+      levels  = c("Omnivore", "Herbivore", "Invertivore", "Corallivore"),
       ordered = TRUE
     )
   )
-
-
-# Calculate mean and standard error of abundance for each functional group, environment, and tide
-funcs_mean <- funcs %>%
-  group_by(Environment, Tide, functional) %>%
-  summarise(
-    mean_func = mean(total),              # Mean abundance
-    se = sd(total) / sqrt(n())            # Standard error of the mean
-  ) %>%
-  ungroup() %>%
-  
-  # Ensure all factor combinations are present, filling missing means with 0
-  complete(Environment, Tide, functional, fill = list(mean_func = 0)) %>%
-  drop_na() %>% 
-  # Reorder functional factor for consistency
-  mutate(
-    functional = factor(
-      functional,
-      levels = c("Omnivore", "Herbivore", "Invertivore", "Corallivore"),
-      ordered = TRUE
-    )
-  )
-
 ```
 
-Create plot of functional group abundances by SGD and tide. 
-```{r Fig2Aplot}
-
-Fig2A <- ggplot() +
-  # Plot individual replicate points 
-  geom_point(
-    data = funcs,
-    aes(x = Environment, y = total, color = Environment, group = Tide, shape = Tide),
-    position = position_dodge(width = 0.7),
-    alpha = 0.5
-  ) +
-  # Add means for each group as larger points
-  geom_point(
-    data = funcs_mean,
-    aes(x = Environment, y = mean_func, color = Environment, group = Tide, shape = Tide),
-    position = position_dodge(width = 0.7),
-    size = 3
-  ) +
-  # Add error bars for standard error around means
-  geom_errorbar(
-    data = funcs_mean,
-    aes(
-      x = Environment,
-      ymin = mean_func - se,
-      ymax = mean_func + se,
-      color = Environment,
-      group = Tide
-    ),
-    position = position_dodge(width = 0.7),
-    width = 0.2
-  ) +
-  # Facet by functional group, each with its own y-axis scale
-  facet_grid(. ~ functional, scales = "free_y") +
-  
-  # Transform y-axis (log + 1) for better visualization of abundances
-  scale_y_continuous(transform = "log1p") +
-  
-  # Set custom colors for SGD conditions
-  scale_color_manual(
-    values = c("Ambient" = ambient_color, "SGD" = sgd_color),
-    guide = "none"  # Hide the color legend since it's redundant with x-axis
-  ) +
-  
-  # Clean, black-and-white theme 
-  theme_bw() +
-  theme(
-    legend.title = element_blank(),
-    strip.text = element_text(size = 14, face = "bold"),
-    strip.background = element_rect(fill = "white", linetype = 0),
-    axis.text.x = element_text(size = 14),
-    axis.text.y = element_text(size = 12),
-    axis.title.y = element_text(size = 14),
-    legend.text = element_text(size = 14)
-  ) +
-  # Add axis labels 
-  labs(
-    x = "",
-    y = "Mean abundance (± SE)"
-  ) +
-  # Control which legends to show
-  guides(
-    color = "none",
-    shape = guide_legend(title = NULL)
-  )
-
-
-```
 
 ### Fig. 2, Subplot B
 
 ```{r Fig2Bprocess}
-
 # Calculate mean relative abundance for each genus in SGD and Ambient environments
 relative_abundance_data <- all_cam %>%
-  filter(Activity == "nat") %>%                                    # Only swimming fish activity, not feeding observations
-  complete(Environment, Habitat, Replicate, genus, fill = list(nmax = 0)) %>% # Ensure all genus x site x replicate combos are present, fill zeros
+  filter(Activity == "nat") %>%                                                  # Only swimming fish activity, not feeding observations
+  complete(Environment, Habitat, Replicate, genus, fill = list(nmax = 0)) %>%    # Ensure all genus x site x replicate combos are present, fill zeros
   group_by(Environment, Habitat, Replicate) %>%
-  mutate(total_abundance = sum(nmax, na.rm = TRUE)) %>%            # Total fish abundance per replicate
+  mutate(total_abundance = sum(nmax, na.rm = TRUE)) %>%                          # Total fish abundance per replicate
   group_by(Environment, Habitat, Replicate, genus) %>%
   summarise(
-    species_abundance = sum(nmax, na.rm = TRUE),                   # Total abundance for each genus per replicate
-    total_abundance = first(total_abundance),                      # Carry forward replicate total
-    rel_abundance = ifelse(total_abundance > 0, species_abundance / total_abundance, 0), # Proportion of community
-    .groups = "drop"
+    species_abundance = sum(nmax, na.rm = TRUE),                                 # Total abundance for each genus per replicate
+    total_abundance   = first(total_abundance),                                  # Carry forward replicate total
+    rel_abundance     = ifelse(total_abundance > 0, species_abundance / total_abundance, 0),  # Proportion of community
+    .groups           = "drop"
   )
 
 # Identify genera found only in SGD and not in Ambient
@@ -757,7 +643,7 @@ ambient_species <- relative_abundance_data %>%
   distinct(genus) %>%
   pull(genus)
 
-# List of genera unique to SGD (appear nowhere in Ambient environments)
+# List of genera unique to SGD
 sgd_unique_species <- setdiff(sgd_species, ambient_species)
 
 # Get mean relative abundance for every genus in SGD environments
@@ -765,315 +651,168 @@ sgd_all_data <- relative_abundance_data %>%
   filter(Environment == "SGD") %>%
   group_by(genus) %>%
   summarise(
-    mean_rel_abundance = mean(rel_abundance, na.rm = TRUE), # Average prop. across all SGD replicates
-    .groups = "drop"
+    mean_rel_abundance = mean(rel_abundance, na.rm = TRUE),   # Average prop. across all SGD replicates
+    .groups            = "drop"
   )
 
 # Add functional group annotation and unique/non-unique status
 species_functional_map <- all_cam %>%
-  select(genus, functional) %>%
+  dplyr::select(genus, functional) %>%
   distinct()
 
 sgd_all_data <- sgd_all_data %>%
-  left_join(species_functional_map, by = "genus") %>%              # Annotate by functional group
+  left_join(species_functional_map, by = "genus") %>%                  # Annotate by functional group
   mutate(
-    genus = str_trim(genus),                                       # Remove trailing/leading spaces
+    genus      = str_trim(genus),                                      # Remove trailing/leading spaces
     functional = str_trim(functional),
-    functional = str_to_title(functional),                         # Standardize capitalization
-    functional = ifelse(is.na(functional), "Unknown", functional), # Assign "Unknown" if missing
-    is_unique = genus %in% sgd_unique_species,                     # Boolean: unique to SGD?
+    functional = str_to_title(functional),                             # Standardize capitalization
+    functional = ifelse(is.na(functional), "Unknown", functional),     # Assign "Unknown" if missing
+    is_unique  = genus %in% sgd_unique_species,
     # Assign display category for plotting: highlight unique functional group, grey others
     display_functional = ifelse(is_unique, functional, "Non-unique"),
-    # Remove very low-N unique herbivores and invertivores 
+    # Remove very low-N unique herbivores and invertivores
     display_functional = ifelse(functional == "Herbivore", "Non-unique", display_functional),
     display_functional = ifelse(functional == "Invertivore", "Non-unique", display_functional),
     # For stacked bar: set order so unique omnivores appear first
     display_functional_order = case_when(
-      display_functional == "Omnivore" ~ 1,
+      display_functional == "Omnivore"   ~ 1,
       display_functional == "Non-unique" ~ 2,
-      TRUE ~ 3
+      TRUE                               ~ 3
     )
   )
 
 # Prep for stacked bar chart (cumulative proportions)
 sgd_all_data <- sgd_all_data %>%
-  arrange(display_functional_order, desc(mean_rel_abundance)) %>%  # Show unique omnivores first
+  arrange(display_functional_order, desc(mean_rel_abundance)) %>%   # Show unique omnivores first
   ungroup() %>%
   mutate(
-    proportion = mean_rel_abundance,                               # For clarity
-    cum_proportion = cumsum(proportion),                           # Cumulative sum for stacking
-    start_pos = lag(cum_proportion, default = 0),                  # Stacking start position
-    end_pos = cum_proportion                                       # Stacking end position
+    proportion     = mean_rel_abundance,                  # For clarity
+    cum_proportion = cumsum(proportion),                  # Cumulative sum for stacking
+    start_pos      = lag(cum_proportion, default = 0),    # Stacking start position
+    end_pos        = cum_proportion                       # Stacking end position
   )
 
-# Define plotting colors by functional group
+# Label color: white on dark green, black on light grey
+sgd_all_data <- sgd_all_data %>%
+  mutate(label_col = if_else(display_functional == "Omnivore", "white", "black")) %>%
+  mutate(
+    label_col  = if_else(display_functional == "Omnivore", "white", "black"),
+    short_name = sub("^(\\S)\\S*\\s+", "\\1. ", genus)   # "Kuhlia mugil" -> "K. mugil"
+  )
+
 functional_colors <- c(
-  "Corallivore" = "#E69F00",
-  "Herbivore" = "#CC79A7",
-  "Invertivore" = "#E8601C",
-  "Omnivore" = "#8B0000",
-  "Unknown" = "#808080",
-  "Non-unique" = "#D3D3D3"  # Light grey for species also found in Ambient
+  "Omnivore"   = sgd_color,   # unique SGD omnivores
+  "Non-unique" = "#D3D3D3"    # species also found in ambient
 )
 
-# Plot function for stacked bar 
-create_sgd_stacked_bar_vertical_text <- function() {
-  ggplot(sgd_all_data, aes(xmin = start_pos, xmax = end_pos, ymin = 0, ymax = 1)) +
-    # Each genus as a segment
-    geom_rect(aes(fill = display_functional), color = "white", size = 0.5) +
-    # Label genus name (vertical, only if >5% abundance)
-    geom_text(
-      data = filter(sgd_all_data, proportion > 0.05),
-      aes(x = (start_pos + end_pos) / 2, y = 0.5, label = genus),
-      color = "white", fontface = "bold.italic", size = 4,
-      angle = 90, hjust = 0.5, vjust = 0.5
-    ) +
-    # Add % value for prominent unique omnivores below the bar
-    geom_text(
-      data = filter(sgd_all_data, proportion > 0.05 & display_functional == "Omnivore"),
-      aes(x = (start_pos + end_pos) / 2, y = -0.1, label = paste0(round(proportion * 100, 1), "%")),
-      color = "#8B0000", size = 3, fontface = "bold",
-      hjust = 0.5, vjust = 0.5
-    ) +
-    scale_fill_manual(
-      values = functional_colors,
-      name = "Functional Group",
-      breaks = c("Omnivore", "Non-unique"),
-      labels = c("Unique SGD Species (Omnivores)", "Remaining Species")
-    ) +
-    scale_y_continuous(expand = c(0, 0)) +
-    coord_cartesian(xlim = c(0, 1), ylim = c(-0.25, 1.1)) +
-    theme_minimal() +
-    theme(
-      axis.title.y = element_blank(),
-      axis.text.y = element_blank(),
-      axis.text.x = element_blank(),
-      axis.ticks.y = element_blank(),
-      axis.ticks.x = element_blank(),
-      panel.grid.major.y = element_blank(),
-      panel.grid.minor.y = element_blank(),
-      panel.grid.major.x = element_blank(),
-      panel.grid.minor.x = element_blank(),
-      legend.position = "bottom",
-      axis.title.x = element_text(size = 14, face = "italic"),
-      legend.title = element_blank(),
-      legend.text = element_text(size = 12)
-    ) +
-    labs(x = "Mean Relative Abundance")
-}
-
-# Generate and save the plot
-Fig2B <- create_sgd_stacked_bar_vertical_text()
-
+Fig2B <- ggplot(sgd_all_data, aes(xmin = start_pos, xmax = end_pos, ymin = 0, ymax = 1)) +
+  geom_rect(aes(fill = display_functional), colour = "white", linewidth = 0.4) +
+  # genus names (bars > 5%)
+  geom_text(data = filter(sgd_all_data, proportion > 0.05),
+            aes(x = (start_pos + end_pos) / 2, y = 0.5, label = short_name, colour = label_col),
+            fontface = "bold.italic", size = (fig2_base + 1) / .pt, angle = 90) +
+  # % below the unique omnivores
+  geom_text(data = filter(sgd_all_data, proportion > 0.05, display_functional == "Omnivore"),
+            aes(x = (start_pos + end_pos) / 2, y = -0.1,
+                label = paste0(round(proportion * 100, 1), "%")),
+            colour = sgd_color, fontface = "bold", size = fig2_base / .pt) +
+  scale_colour_identity() +
+  scale_fill_manual(values = functional_colors,
+                    breaks = c("Omnivore", "Non-unique"),
+                    labels = c("Unique SGD species (omnivores)", "Remaining species")) +
+  scale_y_continuous(expand = c(0, 0)) +
+  coord_cartesian(xlim = c(0, 1), ylim = c(-0.25, 1.1)) +
+  labs(x = "Mean relative abundance") +
+  theme_meps(base = fig2_base) +
+  theme(
+    panel.grid      = element_blank(),
+    panel.border    = element_blank(),
+    axis.text       = element_blank(),
+    axis.ticks      = element_blank(),
+    axis.title.y    = element_blank(),
+    axis.title.x    = element_text(face = "italic"),
+    legend.position = "bottom",
+    legend.text     = element_text(size = fig2_base),
+    legend.key.size = unit(4, "mm")
+  )
 ```
 
+### Fig. 2, Subplot C data processing
 
-### Fig. 2, Subplot C
-```{r Fig2diversity}
-
+```{r Fig2C}
 # Calculate observed species richness per replicate
 genus_diversity_indices <- all_cam %>%
   # Filter for all fish observations (non feeding only)
   filter(Activity == "nat") %>%
-  
+
   # Group by habitat, SGD exposure, tidal state, replicate, and unique species code
   group_by(Habitat, Environment, Tide, Replicate, code) %>%
-  
+
   # Retain first maximum abundance value for each species in each replicate
   summarise(nmax = first(nmax)) %>%
-  
-  # Summarize by site 
+
+  # Summarize by site
   group_by(Habitat, Environment, Tide, Replicate) %>%
   summarise(
-    richness = n_distinct(code),  # Count unique species (codes) for richness
-    .groups = "drop"
+    richness = n_distinct(code),   # Count unique species (codes) for richness
+    .groups  = "drop"
   ) %>%
-  
+
   # Combine SGD and tide as a single factor for downstream use
   mutate(sgd_tide = paste(Environment, Tide))
-
-
-# Calculate mean and standard error of richness by SGD and tide
-means_diversity <- genus_diversity_indices %>%
-  group_by(Environment, Tide) %>%
-  summarise(
-    mean_rich = mean(richness),                      # Mean species richness
-    se_rich = sd(richness) / sqrt(n())               # Standard error of mean richness
-  ) %>%
-  # Create combined factor for plotting, as above
-  mutate(sgd_tide = paste(Environment, Tide))
-
-
-# Plot observed and mean species richness by SGD and tidal state
-Fig2C <- genus_diversity_indices %>%
-  ggplot() +
-  
-  # Plot individual replicate richness 
-  geom_point(
-    position = position_dodge(width = 0.5),
-    aes(x = Environment, y = richness, color = Environment, group = Tide),
-    alpha = 0.3
-  ) +
-  
-  # Add means for each group as larger points
-  geom_point(
-    data = means_diversity,
-    position = position_dodge(width = 0.5),
-    aes(
-      x = Environment,
-      y = mean_rich,
-      color = Environment,
-      shape = Tide,
-      group = Tide
-    ),
-    size = 2.5
-  ) +
-  
-  # Add error bars for SE of richness
-  geom_errorbar(
-    data = means_diversity,
-    position = position_dodge(width = 0.5),
-    aes(
-      x = Environment,
-      ymin = mean_rich - se_rich,
-      ymax = mean_rich + se_rich,
-      color = Environment,
-      group = Tide
-    ),
-    width = 0.1
-  ) +
-  
-  # Use custom color palette for SGD and Ambient sites
-  scale_color_manual(
-    values = c(
-      "SGD" = sgd_color,         
-      "Ambient" = ambient_color  
-    )
-  ) +
-  
-  # Add axis labels
-  labs(
-    x = "", 
-    y = "Species Richness ± SE",
-    title = ""
-  ) +
-  
-  # Order legends for clarity
-  guides(
-    color = guide_legend(order = 1),
-    shape = guide_legend(order = 2)
-  ) +
-  
-  # Clean black-and-white theme
-  theme_bw() +
-  theme(
-    legend.title = element_blank(),
-    axis.text.x = element_text(size = 14),
-    axis.text.y = element_text(size = 12),
-    axis.title.y = element_text(size = 14),
-    legend.text = element_text(size = 12)
-  )
-
-```
-
-
-### Fig. 2, Combined Subplots
-```{r Fig2combined} 
-
-# Remove legends from individual plots to avoid redundancy in composite figure
-Fig2C_no_legend <- Fig2C + theme(legend.position = "none")
-Fig2A_no_legend <- Fig2A + theme(legend.position = "none")
-
-# Extract legends separately from original plots (set to show on right side)
-Fig2C_legend <- get_legend(Fig2C + theme(legend.position = "right"))
-Fig2A_legend <- get_legend(Fig2A + theme(legend.position = "right"))
-
-# Combine both legends into a single vertical legend block for the final figure
-combined_legend <- ggarrange(
-  Fig2A_legend
-)
-
-# Arrange main figure panels without their legends
-plot_without_legend <- ggarrange(
-  # Top row: panel A (functional group abundance plot, alone)
-  ggarrange(
-    Fig2A_no_legend,
-    labels = "A",  # Panel label
-    ncol = 1,
-    font.label = list(size = 16, face = "bold")
-  ),
-  # Bottom row: panels B (SGD species barplot) and C (species richness)
-  ggarrange(
-    Fig2B,
-    Fig2C_no_legend,
-    labels = c("B", "C"),  
-    ncol = 2,
-    widths = c(2, 1),      # Wider panel for stacked barplot
-    font.label = list(size = 16, face = "bold")
-  ),
-  nrow = 2             
-)
-
-# Add combined legend to the right of the figure panels
-Fig2combined <- ggarrange(
-  plot_without_legend,    # All panels
-  combined_legend,        # Both legends stacked
-  ncol = 2,               # Panels left, legend right
-  widths = c(4, 0.5)      # Make main plots wider than legends
-)
-
-# Save the final composite figure 
-ggsave(
-  here("Outputs", "Fig2.png"),    
-  Fig2combined,                      
-  width = 12,                              
-  height = 8,                              
-  dpi = 1000                              
-)
-
-Fig2combined
 ```
 
 ## Statistical Analyses
 
-
-```{r fig2Astats}
+```{r Fig2Astats}
 # ============================================================
 # Figure 2A: Functional group abundance across SGD environments
 # Negative binomial GLMM (glmmTMB), two-tailed post-hoc contrasts
 # ============================================================
 
+# ---- Grouping IDs ----
+# Replicate (1-3) = hourly filming rotation; repeats across Environment x Habitat
+#   Site  = unique physical site (12); each site surveyed once per tide
+
+funcs <- funcs %>%
+  mutate(
+    Site  = interaction(Environment, Habitat, Replicate, drop = TRUE),
+    Block = interaction(Tide, Replicate, drop = TRUE)
+  )
 
 # ---- Random-effects structure selection ----
-# Model 1: random intercept for habitat only
-# mixed_model1 <- glmmTMB(
-#   total ~ Environment * Tide * functional + (1|Habitat),
-#   family = nbinom2, data = funcs)
-# Model 2: adds random intercept for replicate
-# mixed_model2 <- glmmTMB(
-#   total ~ Environment * Tide * functional + (1|Habitat) + (1|Replicate),
-#   family = nbinom2, data = funcs)
-# AIC(mixed_model1, mixed_model2)   # added complexity did not improve fit
-# VarCorr(mixed_model1)             # replicate variance ~ 0 -> dropped
-
-abundance_mixed_model <- glmmTMB(
+# Model 1: habitat only
+mixed_model1 <- glmmTMB(
   total ~ Environment * Tide * functional + (1|Habitat),
+  family = nbinom2, data = funcs
+)
+
+# Model 2: habitat + site (repeated surveys of the same site)
+mixed_model2 <- glmmTMB(
+  total ~ Environment * Tide * functional + (1|Habitat) + (1|Site),
+  family = nbinom2, data = funcs
+)
+
+AIC(mixed_model1, mixed_model2)
+VarCorr(mixed_model2)   # site SD ~ 0.27: non-zero, non-singular -> retained
+check_singularity(mixed_model2)
+
+# Final model: site retained as the design-based repeated-measures unit
+abundance_mixed_model <- glmmTMB(
+  total ~ Environment * Tide * functional + (1|Habitat) + (1|Site),
   family = nbinom2,
-  data = funcs
+  data   = funcs
 )
 
 # ============================================================
-# Model assumption checks 
+# Model assumption checks
 # ============================================================
-
 abundance_sim <- simulateResiduals(abundance_mixed_model)
 
-testDispersion(abundance_sim)    #OK
-testZeroInflation(abundance_sim) #OK
-check_overdispersion(abundance_mixed_model)  #OK
-testUniformity(abundance_mixed_model) #OK 
-testOutliers(abundance_sim) #OK
-
+check_singularity(abundance_mixed_model)
+testUniformity(abundance_sim)$p.value
+testDispersion(abundance_sim)$p.value
+testOutliers(abundance_sim)$p.value
 
 # ============================================================
 # Post-hoc contrasts
@@ -1101,54 +840,165 @@ sgd_by_tide_all <- emm_sgd_by_tide %>%
   summary(adjust = "tukey") %>%
   as.data.frame() %>%
   arrange(functional, Tide)
+
+all_sgd_contrasts <- emm_sgd %>%
+  contrast(method = "pairwise", type = "response", by = "functional") %>%
+  summary(infer = TRUE, adjust = "tukey") %>%
+  as.data.frame()
+
+sgd_by_tide_all <- emm_sgd_by_tide %>%
+  contrast(method = "pairwise", type = "response") %>%
+  summary(infer = TRUE, adjust = "tukey") %>%
+  as.data.frame()
+
+# Ambient/SGD from emmeans -> flip to SGD/Ambient
+flip <- function(d) {
+  d %>%
+    transmute(
+      across(any_of(c("functional", "Tide"))),
+      ratio_SGD = 1 / ratio,
+      LCL       = 1 / asymp.UCL,
+      UCL       = 1 / asymp.LCL,
+      z         = -z.ratio,
+      p         = p.value
+    )
+}
 ```
 
-
-
-
 ```{r fig2Cstats}
+# Unique site ID
+genus_diversity_indices <- genus_diversity_indices %>%
+  mutate(Site = interaction(Environment, Habitat, Replicate, drop = TRUE))
 
-# # Fit a GLMM for species richness (count of genera per replicate)
-# richness_model <- glmmTMB(
-#   richness ~ Environment * Tide + (1|Habitat) + (1|Replicate),
-#   family = nbinom2,
-#   data = genus_diversity_indices
-# )
-
-# Drop replicate random effect since variance is zero 
+# Species richness: habitat + site random intercepts
 richness_model <- glmmTMB(
-  richness ~ Environment * Tide + (1|Habitat),
+  richness ~ Environment * Tide + (1|Habitat) + (1|Site),
   family = nbinom2,
-  data = genus_diversity_indices
+  data   = genus_diversity_indices
 )
 
 # ============================================================
-# Model assumption checks 
+# Model assumption checks (re-run: model changed)
 # ============================================================
 richness_sim <- simulateResiduals(richness_model)
-plot(richness_sim)                 # OK
-testDispersion(richness_sim)       # OK
-testZeroInflation(richness_sim)    # OK
-check_overdispersion(richness_model) #OK
+check_singularity(richness_model)
+testUniformity(richness_sim)$p.value
+testDispersion(richness_sim)$p.value
+testOutliers(richness_sim)$p.value
+VarCorr(richness_model)
 
-
-# Get emmeans on response scale
+# Tidal contrasts within each environment
 emm_richness <- emmeans(richness_model, ~ Tide | Environment, type = "response")
-
-# Get contrasts
 richness_contrasts <- emm_richness %>%
   contrast(method = "pairwise", adjust = "tukey") %>%
-  summary() %>%
+  summary(infer = TRUE) %>%
   as.data.frame()
-
+richness_contrasts
 ```
 
+## Plots
+
+### Fig. 2, Subplot A
+
+```{r Fig2A_model}
+# Model-estimated marginal means, back-transformed to counts
+emm_2A <- emmeans(abundance_mixed_model, ~ Environment * Tide | functional,
+                  type = "response") %>%
+  as.data.frame() %>%
+  # match funcs, where functional is an ordered factor (avoids a ggplot warning)
+  mutate(functional = factor(functional, levels = levels(funcs$functional), ordered = TRUE))
+
+dodge <- position_dodge(width = 0.6)
+
+Fig2A <- ggplot(funcs, aes(x = Environment, colour = Environment, shape = Tide)) +
+  # raw surveys
+  geom_point(aes(y = total), alpha = 0.35, size = 2,
+             position = position_jitterdodge(jitter.width = 0.15, jitter.height = 0,
+                                             dodge.width = 0.6, seed = 123)) +
+  # model ± SE
+  geom_errorbar(data = emm_2A, aes(ymin = pmax(response - SE, 0), ymax = response + SE),
+                position = dodge, width = 0.25, linewidth = 0.5, show.legend = FALSE) +
+  # model means
+  geom_point(data = emm_2A, aes(y = response), position = dodge, size = 2.6) +
+  facet_grid(. ~ functional) +
+  scale_y_continuous(transform = "log1p", breaks = c(0, 1, 2, 5, 10, 20, 50, 100, 200)) +
+  scale_colour_manual(values = c(Ambient = ambient_color, SGD = sgd_color), guide = "none") +
+  scale_shape_manual(values = c("High Tide" = 16, "Low Tide" = 17)) +
+  labs(x = NULL, y = "Estimated abundance ± SE") +
+  theme_meps(base = fig2_base) +
+  theme(
+    panel.grid.minor   = element_blank(),
+    panel.grid.major.x = element_blank(),
+    strip.clip         = "off"
+  )
+```
+
+### Fig. 2, Subplot C 
+
+```{r Fig2C_model}
+# Model-estimated marginal means, back-transformed to species counts
+emm_2C <- emmeans(richness_model, ~ Environment * Tide, type = "response") %>%
+  as.data.frame()
+
+dodge <- position_dodge(width = 0.6)
+
+Fig2C <- ggplot(genus_diversity_indices, aes(x = Environment, colour = Environment, shape = Tide)) +
+  # raw surveys
+  geom_point(aes(y = richness), alpha = 0.35, size = 2,
+             position = position_jitterdodge(jitter.width = 0.15, jitter.height = 0,
+                                             dodge.width = 0.6, seed = 123)) +
+  # model ± SE
+  geom_errorbar(data = emm_2C, aes(ymin = response - SE, ymax = response + SE),
+                position = dodge, width = 0.25, linewidth = 0.5, show.legend = FALSE) +
+  # model means
+  geom_point(data = emm_2C, aes(y = response), position = dodge, size = 2.6) +
+  scale_colour_manual(values = c(Ambient = ambient_color, SGD = sgd_color), guide = "none") +
+  scale_shape_manual(values = c("High Tide" = 16, "Low Tide" = 17)) +
+  labs(x = NULL, y = "Estimated richness ± SE") +
+  theme_meps(base = fig2_base) +
+  theme(
+    panel.grid.minor   = element_blank(),
+    panel.grid.major.x = element_blank()
+  )
+```
+
+### Fig. 2, Combined Subplots
+
+```{r Fig2combined}
+# Panel A with the tide legend placed in the top-right of the Corallivore facet
+Fig2A_leg <- Fig2A +
+  guides(shape = guide_legend(override.aes = list(size = 1.8, alpha = 1))) +   # smaller legend symbols
+  theme(
+    legend.position      = c(0.995, 0.99),
+    legend.justification = c(1, 1),
+    legend.title         = element_blank(),
+    legend.text          = element_text(size = fig2_base - 1),   # 9 pt
+    legend.key.size      = unit(3, "mm"),
+    legend.spacing.y     = unit(0, "mm"),
+    legend.margin        = margin(1, 1, 1, 1),
+    legend.background    = element_rect(fill = "transparent", colour = NA),
+    legend.key           = element_rect(fill = "transparent", colour = NA)
+  )
+
+Fig2combined <- ggarrange(
+  ggarrange(Fig2A_leg, labels = "A", font.label = fig2_label),
+  ggarrange(Fig2B,
+            Fig2C + theme(legend.position = "none"),
+            labels = c("B", "C"), ncol = 2, widths = c(2, 1),
+            font.label = fig2_label),
+  nrow = 2
+)
+
+ggsave(here("Outputs", "Fig2ABC.png"), Fig2combined,
+       width = 169, height = 120, units = "mm",
+       dpi = 600, bg = "white")
+```
 
 ## Supplemental Materials
+
 ### Table S3
 
 ```{r TableS3}
-
 emm_sgd <- emmeans(abundance_mixed_model, ~ Environment * functional)
 sgd_df <- contrast(emm_sgd, method = "pairwise", type = "response",
                    by = "functional") %>%
@@ -1157,46 +1007,31 @@ sgd_df <- contrast(emm_sgd, method = "pairwise", type = "response",
 
 table_S3 <- sgd_df %>%
   mutate(
-    ratio_sgd = 1/ratio,                 # emmeans gives Ambient/SGD -> invert
-    CI_lower  = 1/asymp.UCL,
-    CI_upper  = 1/asymp.LCL,
+    ratio_sgd       = 1 / ratio,                    # emmeans gives Ambient/SGD -> invert
+    CI_lower        = 1 / asymp.UCL,
+    CI_upper        = 1 / asymp.LCL,
     ratio_formatted = sprintf("%.2f", ratio_sgd),
     CI_formatted    = sprintf("[%.2f, %.2f]", CI_lower, CI_upper),
-    SE_formatted    = sprintf("%.3f", SE),
-    z_formatted     = sprintf("%.2f", abs(z.ratio)),
-    p_formatted = case_when(p.value < 0.001 ~ "< 0.001",
-                            TRUE ~ sprintf("%.3f", p.value))
+    z_formatted     = sprintf("%.2f", -z.ratio),    # flip sign because the ratio was inverted
+    p_formatted     = case_when(p.value < 0.001 ~ "< 0.001",
+                                TRUE            ~ sprintf("%.3f", p.value))
   ) %>%
-  select(functional, ratio_formatted, CI_formatted, SE_formatted,
-         z_formatted, p_formatted) %>%
-  rename("Functional Group" = functional, "Ratio (SGD/Amb)" = ratio_formatted,
-         "95% CI" = CI_formatted, "SE" = SE_formatted, "z" = z_formatted,
-         "P" = p_formatted)
+  dplyr::select(functional, ratio_formatted, CI_formatted, z_formatted, p_formatted) %>%
+  rename(
+    "Trophic Group"   = functional,
+    "Ratio (SGD/Amb)" = ratio_formatted,
+    "95% CI"          = CI_formatted,
+    "z"               = z_formatted,
+    "p"               = p_formatted
+  )
 
-caption_S3 <- paste0(
-"Table S3. SGD effects on functional group abundances, averaged across tidal states.\n",
-"Negative binomial GLMM; random effect: Habitat. Ratios = SGD / Ambient abundance.\n",
-"Two-sided contrasts, Tukey-adjusted. Uppercase letters in Fig. 2A correspond to these contrasts."
-)
-# grob / png / grid.draw block unchanged
 table_S3_grob <- tableGrob(table_S3, theme = table_theme, rows = NULL)
-title_S3 <- textGrob(caption_S3, x = 0.5, vjust = 0, y = -0.5, 
-                     gp = gpar(fontsize = 9, fontface = "italic"))
-final_S3 <- arrangeGrob(title_S3, table_S3_grob, 
-                        heights = unit.c(unit(4, "lines"), unit(1, "null")))
-
-png(here("Outputs", "TableS3_updated.png"), width = 12, height = 7, units = "in", res = 300)
-grid.draw(final_S3)
-dev.off()
-
-grid.draw(final_S3)
-
-
+save_table(table_S3_grob, "TableS3.png")
 ```
 
 ### Table S4
-```{r TableS4}
 
+```{r TableS4}
 emm_sgd_by_tide <- emmeans(abundance_mixed_model, ~ Environment | Tide + functional)
 sgd_tide_df <- contrast(emm_sgd_by_tide, method = "pairwise", type = "response") %>%
   summary(infer = TRUE, adjust = "tukey") %>%
@@ -1205,110 +1040,65 @@ sgd_tide_df <- contrast(emm_sgd_by_tide, method = "pairwise", type = "response")
 table_S4 <- sgd_tide_df %>%
   arrange(functional, Tide) %>%
   mutate(
-    ratio_sgd = 1/ratio,
-    CI_lower  = 1/asymp.UCL,
-    CI_upper  = 1/asymp.LCL,
+    ratio_sgd       = 1 / ratio,
+    CI_lower        = 1 / asymp.UCL,
+    CI_upper        = 1 / asymp.LCL,
     ratio_formatted = sprintf("%.2f", ratio_sgd),
     CI_formatted    = sprintf("[%.2f, %.2f]", CI_lower, CI_upper),
-    SE_formatted    = sprintf("%.3f", SE),
-    z_formatted     = sprintf("%.2f", abs(z.ratio)),
-    p_formatted = case_when(p.value < 0.001 ~ "< 0.001",
-                            TRUE ~ sprintf("%.3f", p.value))
+    z_formatted     = sprintf("%.2f", -z.ratio),    # flip sign because the ratio was inverted
+    p_formatted     = case_when(p.value < 0.001 ~ "< 0.001",
+                                TRUE            ~ sprintf("%.3f", p.value))
   ) %>%
-  select(functional, Tide, ratio_formatted, CI_formatted, SE_formatted,
-         z_formatted, p_formatted) %>%
-  rename("Functional Group" = functional, "Tidal State" = Tide,
-         "Ratio (SGD/Amb)" = ratio_formatted, "95% CI" = CI_formatted,
-         "SE" = SE_formatted, "z" = z_formatted, "P" = p_formatted)
-
-caption_S4 <- paste0(
-"Table S4. SGD effects on functional group abundances at each tidal state.\n",
-"Negative binomial GLMM; random effect: Habitat. Ratios = SGD / Ambient abundance.\n",
-"Two-sided contrasts, Tukey-adjusted."
-)
-
+  dplyr::select(functional, Tide, ratio_formatted, CI_formatted, z_formatted, p_formatted) %>%
+  rename(
+    "Trophic Group"   = functional,
+    "Tidal State"     = Tide,
+    "Ratio (SGD/Amb)" = ratio_formatted,
+    "95% CI"          = CI_formatted,
+    "z"               = z_formatted,
+    "p"               = p_formatted
+  )
 
 table_S4_grob <- tableGrob(table_S4, theme = table_theme, rows = NULL)
-title_S4 <- textGrob(caption_S4, x = 0.5, vjust = 0, y = -0.5, 
-                     gp = gpar(fontsize = 9, fontface = "italic"))
-final_S4 <- arrangeGrob(title_S4, table_S4_grob, 
-                        heights = unit.c(unit(4, "lines"), unit(1, "null")))
-
-png(here("Outputs", "TableS4_updated.png"), width = 11, height = 6, units = "in", res = 300)
-grid.draw(final_S4)
-dev.off()
-
-grid.draw(final_S4)
-
-
+save_table(table_S4_grob, "TableS4.png")
 ```
 
-
 ### Table S5
-```{r TableS5}
 
+```{r TableS5}
 emm_richness <- emmeans(richness_model, ~ Tide | Environment, type = "response")
-richness_contrasts_full <- contrast(emm_richness, method = "pairwise") %>%
-  summary(infer = TRUE, adjust = "tukey")    
-richness_df <- as.data.frame(richness_contrasts_full)
+richness_df <- contrast(emm_richness, method = "revpairwise") %>%
+  summary(infer = TRUE, adjust = "tukey") %>%
+  as.data.frame()
 
 table_S5 <- richness_df %>%
   mutate(
     ratio_formatted = sprintf("%.2f", ratio),
-    CI_formatted = sprintf("[%.2f, %.2f]", asymp.LCL, asymp.UCL),
-    SE_formatted = sprintf("%.3f", SE),
-    z_formatted = sprintf("%.2f", z.ratio),
-    p_formatted = case_when(
-      p.value < 0.001 ~ "< 0.001",
-      TRUE ~ sprintf("%.3f", p.value)
-    )
+    CI_formatted    = sprintf("[%.2f, %.2f]", asymp.LCL, asymp.UCL),
+    z_formatted     = sprintf("%.2f", z.ratio),
+    p_formatted     = case_when(p.value < 0.001 ~ "< 0.001",
+                                TRUE            ~ sprintf("%.3f", p.value))
   ) %>%
-  select(Environment, contrast, ratio_formatted, CI_formatted, SE_formatted,
-         z_formatted, p_formatted) %>%
+  dplyr::select(Environment, contrast, ratio_formatted, CI_formatted, z_formatted, p_formatted) %>%
   rename(
-    "Environment" = Environment,
-    "Contrast" = contrast,
-    "Ratio (High/Low)" = ratio_formatted,
-    "95% CI" = CI_formatted,
-    "SE" = SE_formatted,
-    "z" = z_formatted,
-    "P" = p_formatted
+    "Environment"      = Environment,
+    "Contrast"         = contrast,
+    "Ratio (Low/High)" = ratio_formatted,
+    "95% CI"           = CI_formatted,
+    "z"                = z_formatted,
+    "p"                = p_formatted
   )
 
-caption_S5 <- paste0(
-"Table S5. Tidal effects on species richness within each environment.\n",
-"Negative binomial GLMM; random effect: Habitat. Ratios = High Tide / Low Tide richness.\n",
-"Two-sided contrasts, Tukey-adjusted. Letters in Fig. 2C correspond to these contrasts."
-)
-
 table_S5_grob <- tableGrob(table_S5, theme = table_theme, rows = NULL)
-title_S5 <- textGrob(caption_S5, x = 0.5, vjust = 0, y = -0.5,
-                     gp = gpar(fontsize = 9, fontface = "italic"))
-final_S5 <- arrangeGrob(title_S5, table_S5_grob,
-                        heights = unit.c(unit(3, "lines"), unit(1, "null")))
-
-png(here("Outputs", "TableS5_updated.png"), width = 10, height = 4, units = "in", res = 300)
-grid.draw(final_S5)
-dev.off()
-
-grid.draw(final_S5)
-
+save_table(table_S5_grob, "TableS5.png")
 ```
-
-
-
-
 
 # Figure 3.
 
-Tidal changes in fish feeding rates across functional groups and substrates. Points show the mean difference (± SE) in bite rates between low and high tide; positive values indicate higher feeding at low tide. Data are shown for benthic and water column feeding across four functional groups in ambient and SGD environments. The dashed line indicates no difference between tides. Colored points indicate significant differences from zero; grey points indicate non-significant differences or trends (Gaussian generalized linear mixed model with environment-specific dispersion, two-sided tests, false discovery rate [FDR]-adjusted, p < 0.05; Table S7). Graphic elements created using Canva and Microsoft PowerPoint
-
-
-
 ## Plotting Start
-```{r Fig3plot_1}
 
-# Functional group bite rate analysis 
+```{r Fig3plot_1}
+# Functional group bite rate analysis
 # Identify which species were present at each replicate-tide
 present_species <- all_cam %>%
   filter(Activity == "nat") %>%
@@ -1319,18 +1109,18 @@ present_species <- all_cam %>%
 species_bite_rates_substrate <- all_cam %>%
   filter(Activity == "feed") %>%
   dplyr::select(Environment, Habitat, Replicate, code, functional, substrate, Tide, nmax, Number_bites) %>%
-  
+
   # Summarize by species-substrate-tide
-  group_by(Environment, Habitat, Replicate, code, functional,  substrate, Tide) %>%
+  group_by(Environment, Habitat, Replicate, code, functional, substrate, Tide) %>%
   summarize(
-    n_ind = max(nmax),
+    n_ind       = max(nmax),
     total_bites = sum(Number_bites),
-    .groups = "drop"
+    .groups     = "drop"
   )
 
 # Expand present species to both substrates since if a species was present, it could feed at either substrate
 present_species_both_substrates <- present_species %>%
-  select(-present) %>%
+  dplyr::select(-present) %>%
   expand_grid(substrate = c("Benthos", "Water Column"))
 
 # Join feeding data with presence data
@@ -1339,216 +1129,202 @@ species_bite_rates_complete <- present_species_both_substrates %>%
   left_join(species_bite_rates_substrate,
             by = c("Environment", "Habitat", "Replicate", "code", "functional", "substrate", "Tide")) %>%
   mutate(
-    n_ind = replace_na(n_ind, 0),
+    n_ind       = replace_na(n_ind, 0),
     total_bites = replace_na(total_bites, 0),
-    bite_rate = if_else(n_ind > 0, (total_bites / n_ind) / 10, 0)
+    bite_rate   = if_else(n_ind > 0, (total_bites / n_ind) / 10, 0)
   )
 
 # Aggregate to functional groups by substrate
 functional_bite_rates_substrate <- species_bite_rates_complete %>%
   group_by(Environment, Habitat, Replicate, functional, substrate, Tide) %>%
   summarize(
-    n_ind = sum(n_ind),
+    n_ind       = sum(n_ind),
     total_bites = sum(total_bites),
-    bite_rate = if_else(n_ind > 0, (total_bites / n_ind) / 10, 0),
-    .groups = "drop"
+    bite_rate   = if_else(n_ind > 0, (total_bites / n_ind) / 10, 0),
+    .groups     = "drop"
   )
 
 # Calculate tidal differences
 func_groups <- functional_bite_rates_substrate %>%
-  # Reshape: one row per replicate-functional-substrate, columns for each tide
+  # Reshape: one row per site-functional-substrate, columns for each tide
   pivot_wider(
-    id_cols = c(Environment, Habitat, Replicate, functional, substrate),
-    names_from = Tide,
+    id_cols     = c(Environment, Habitat, Replicate, functional, substrate),
+    names_from  = Tide,
     values_from = bite_rate
   ) %>%
-  
   # Calculate difference (Low - High)
   mutate(diff = `Low Tide` - `High Tide`) %>%
-  
   # Remove cases where functional group wasn't present at both tides
-  drop_na(diff)
+  drop_na(diff) %>%
+  # Unique site ID (Replicate = filming block, repeats across Environment x Habitat)
+  mutate(Site = interaction(Environment, Habitat, Replicate, drop = TRUE))
 
-# Calculate group means 
+stopifnot(n_distinct(func_groups$Site) == 12)
+
+# Raw group means
 func_means <- func_groups %>%
   # Summarize bite rate differences by environment, functional group, and substrate
   group_by(Environment, functional, substrate) %>%
   summarize(
-    mean_bite_rate = mean(diff),          # Mean bite rate difference (Low - High tide)
-    sd_bite_rate = sd(diff),              # Standard deviation
-    se_bite_rate = sd_bite_rate / sqrt(n()), # Standard error
-    .groups = "drop"                      
+    mean_bite_rate = mean(diff),                 # Mean bite rate difference (Low - High tide)
+    sd_bite_rate   = sd(diff),                   # Standard deviation
+    se_bite_rate   = sd_bite_rate / sqrt(n()),   # Standard error
+    .groups        = "drop"
   ) %>%
-  drop_na()                               # Remove any incomplete group summaries
-
+  drop_na()                                      # Remove any incomplete group summaries
 ```
 
-## Statistical Analyses 
+## Statistical Analyses
 
 ```{r Fig3stats}
+# ============================================================
+# Gaussian GLMM: diff = low-minus-high tide bite rate
+# ============================================================
+fig3_m2 <- glmmTMB(
+  diff ~ Environment * substrate * functional + (1|Habitat) + (1|Site),
+  dispformula = ~ Environment, family = gaussian, data = func_groups
+)
 
-# Fit Gaussian GLMM
-# diff = low-minus-high tide bite rate; random effects for habitat and replicate
+VarCorr(fig3_m2)             # Habitat SD ~ 0
+check_singularity(fig3_m2)   # CHECK: TRUE
+
+# Final model: site only
 my_glmm_gaussian <- glmmTMB(
-  diff ~ Environment * substrate * functional + (1|Habitat) + (1|Replicate),
-  dispformula = ~ Environment,
-  family = gaussian(link = "identity"),
-  data = func_groups
+  diff ~ Environment * substrate * functional + (1|Site),
+  dispformula = ~ Environment, family = gaussian, data = func_groups
 )
 
 # ============================================================
-# Model assumption checks (DHARMa simulation-based residuals)
+# Model assumption checks (re-run: model changed)
 # ============================================================
 gauss_sim <- simulateResiduals(my_glmm_gaussian)
-plot(gauss_sim)                 # OK
-testDispersion(gauss_sim)       # OK
-testUniformity(gauss_sim)       # OK
-testOutliers(gauss_sim)         # OK
-check_singularity(my_glmm_gaussian)   # OK
+check_singularity(my_glmm_gaussian)
+testUniformity(gauss_sim)
+testDispersion(gauss_sim)
+testOutliers(gauss_sim)
+
+VarCorr(my_glmm_gaussian)
 
 # ============================================================
-# test whether tidal difference != 0
+# Test whether tidal difference != 0
 # ============================================================
 feeding_emm <- emmeans(my_glmm_gaussian,
                        ~ Environment * substrate * functional)
 
 feeding_tests <- test(feeding_emm, null = 0, adjust = "fdr") %>%
   as.data.frame()
-
+feeding_tests
 ```
 
-## Plotting End 
+## Plotting End
 
 ```{r Fig3plot_2}
-
+# Flag significant cells from the GLMM tests
 sig_results <- feeding_tests %>%
   mutate(is_sig = p.value < 0.05) %>%
-  select(Environment, substrate, functional, is_sig, p.value)
+  dplyr::select(Environment, substrate, functional, is_sig, p.value)
 
-# Join significance flags onto raw points
-func_groups_sig <- func_groups %>%
-  left_join(sig_results, by = c("Environment", "substrate", "functional"))
+# Attach significance to a data frame and define fill
+add_sig <- function(df) {
+  df %>%
+    left_join(sig_results, by = c("Environment", "substrate", "functional")) %>%
+    mutate(fill_key = ifelse(is_sig, as.character(Environment), "ns"))
+}
 
-
-# Create feeding plot 
-# Create base plot with individual data points and summary statistics
-Fig3 <- func_means %>%
-  ggplot(aes(
-    x = mean_bite_rate,  # Mean difference in bite rates (low - high tide)
-    y = functional       # Functional groups on y-axis
-  )) +
-  
-  # Add vertical reference line at zero (no tidal difference)
-  geom_vline(
-    xintercept = 0, 
-    linetype = "dashed", 
-    color = "firebrick3", 
-    alpha = 0.8
-  ) +
-  
-  # Add individual data points with jitter to show variation
-  geom_jitter(
-    data = func_groups_sig,  # Individual observations with significance info
-    aes(
-      x = diff,  # Individual difference values
-      y = functional,
-      group = Environment,  # Group by SGD condition for dodging
-      color = if_else(is_sig, functional, "non-significant"),  # Color by significance
-      shape = Environment  # Shape indicates SGD vs ambient
-    ),
-    alpha = 0.5,  # Semi-transparent for overlapping points
-    position = position_dodge(width = .5),  # Dodge SGD/ambient vertically
-    size = 1
-  ) +
-  
-  # Add mean points on top
-  geom_point(
-    data = func_means %>% left_join(sig_results),  # Means with significance
-    size = 3,  # Larger size for means
-    aes(
-      group = Environment,
-      color = if_else(is_sig, functional, "non-significant"),
-      shape = Environment
-    ),
-    position = position_dodge(width = 0.5)
-  ) +
-  
-  # Add error bars (standard error)
-  geom_errorbar(
-    data = func_means %>% left_join(sig_results),
-    aes(
-      xmin = mean_bite_rate - se_bite_rate,  
-      xmax = mean_bite_rate + se_bite_rate,
-      group = Environment,
-      color = if_else(is_sig, functional, "non-significant")
-    ),
-    width = 0.1,  # Width of error bar caps
-    position = position_dodge(width = .5)
-  ) +
-  
-  # Facet by substrate type (Benthos vs Water Column)
-  facet_grid(. ~ substrate) +
-  
-  # Labels
-  labs(
-    x = "",  
-    y = ""   
-  ) +
-  
-  # Theme
-  theme_bw() +
-  
-  # Color scale: functional groups in color, non-significant in grey
-  scale_color_manual(values = c(
-    "Corallivore" = "darkred",
-    "Herbivore" = "darkred", 
-    "Invertivore" = "darkred",   
-    "Omnivore" = "darkred",      
-    "Piscivore" = "darkred",
-    "non-significant" = "grey70"  # Grey for non-significant results
-  )) +
-  
-  # Theme customization
-  theme(
-    legend.position = "bottom",  # Legend at bottom
-    axis.text.y = element_text(size = 10),  # Readable y-axis labels
-    strip.background = element_rect(fill = "white", linetype = 0),  # Clean facet headers
-    strip.text.x = element_text(size = 12, face = "bold")  # Bold facet labels
-  ) +
-  
-  # X-axis: symmetric around zero to show positive/negative equally
-  scale_x_continuous(
-    labels = scales::label_number_auto(),  # Auto-format numbers
-    limits = function(x) c(-max(abs(x)), max(abs(x)))  # Symmetric limits
-  ) +
-  
-  # Legend guides
-  guides(
-    color = "none",  
-    shape = guide_legend("")  
+func_means_model <- summary(feeding_emm) %>%
+  as.data.frame() %>%
+  transmute(
+    Environment    = as.character(Environment),
+    substrate      = as.character(substrate),
+    functional     = as.character(functional),
+    mean_bite_rate = emmean,
+    se_bite_rate   = SE
   )
 
+func_groups_sig <- add_sig(func_groups)        # site-level differences
+func_means_sig  <- add_sig(func_means_model)   # model estimates ± SE
 
-# Save figure
-ggsave(
-  here("Outputs", "Fig3.png"), 
-  plot = Fig3, 
-  height = 5,
-  width = 7, 
-  dpi = 500  
-)
+# Numeric y positions (replaces position_dodge so raw points can be jittered vertically)
+y_levels  <- sort(unique(as.character(func_means_sig$functional)))   # same order as before
+dodge_off <- c(Ambient = -0.15, SGD = 0.15)                           # Ambient below, SGD above
+
+place_y <- function(df) {
+  df %>%
+    mutate(y = match(as.character(functional), y_levels) +
+                 dodge_off[as.character(Environment)])
+}
+
+set.seed(123)                                     # reproducible jitter
+func_groups_plot <- place_y(func_groups_sig) %>%
+  mutate(y = y + runif(n(), -0.08, 0.08))         # vertical jitter only; x (diff) unchanged
+func_means_plot  <- place_y(func_means_sig)
+
+# ---- y positions ----
+y_levels  <- sort(unique(as.character(func_means_sig$functional)))   # same order as before
+dodge_off <- c(Ambient = -0.15, SGD = 0.15)   # model means: Ambient below, SGD above
+peek      <- 0.09                             # raw points: offset from their mean (y units)
+
+place_y <- function(df) {
+  df %>%
+    mutate(y = match(as.character(functional), y_levels) +
+                 dodge_off[as.character(Environment)])
+}
+
+func_means_plot  <- place_y(func_means_sig)
+func_groups_plot <- place_y(func_groups_sig) %>%
+  # nudge outward (Ambient down, SGD up) so points peek out from behind the means
+  mutate(y = y + sign(dodge_off[as.character(Environment)]) * peek)
+
+Fig3 <- ggplot(func_means_plot, aes(x = mean_bite_rate, y = y)) +
+  geom_vline(xintercept = 0, linetype = "dashed",
+             colour = "black", alpha = 0.8) +
+  # site-level differences
+  geom_point(data = func_groups_plot,
+             aes(x = diff, y = y, colour = Environment),
+             alpha = 0.3, size = 2, show.legend = FALSE) +
+  # model SE bars
+  geom_errorbar(aes(xmin   = mean_bite_rate - se_bite_rate,
+                    xmax   = mean_bite_rate + se_bite_rate,
+                    colour = Environment),
+                width = 0.1, orientation = "y", show.legend = FALSE) +
+  # model means: filled = significant, solid white = n.s.
+  geom_point(aes(colour = Environment, fill = fill_key),
+             shape = 21, size = 3, stroke = 1) +
+  facet_grid(. ~ substrate) +
+  scale_colour_manual(values = c("Ambient" = ambient_color,
+                                 "SGD"     = sgd_color)) +
+  scale_fill_manual(values = c("Ambient" = ambient_color,
+                               "SGD"     = sgd_color,
+                               "ns"      = "white"),
+                    guide = "none") +
+  guides(colour = guide_legend(override.aes = list(fill = c(ambient_color, sgd_color)))) +
+  scale_x_continuous(
+    labels = scales::label_number_auto(),
+    limits = function(x) c(-max(abs(x)), max(abs(x)))
+  ) +
+  scale_y_continuous(breaks = seq_along(y_levels), labels = y_levels,
+                     expand = expansion(add = 0.5)) +
+  labs(x = NULL, y = NULL) +
+  theme_meps() +
+  theme(
+    legend.position      = "bottom",
+    legend.justification = "center",
+    legend.title         = element_blank(),
+    panel.grid.minor.y   = element_blank()
+  )
 
 Fig3
 
+ggsave(here("Outputs", "Fig3.png"), plot = Fig3,
+       width = 169, height = 110, units = "mm", dpi = 600, bg = "white")
 ```
 
+## Supplemental Materials
 
-## Supplementary Materials
+### Table S6
 
-#### Table S6. 
-```{r Table S6}
-
-# Identify which species were present at each replicate-tide
+```{r TableS6}
+# Identify which species were present at each site-tide
 present_species <- all_cam %>%
   filter(Activity == "nat") %>%
   distinct(Environment, Habitat, Replicate, code, functional, Tide) %>%
@@ -1558,107 +1334,89 @@ present_species <- all_cam %>%
 species_bite_rates <- all_cam %>%
   filter(Activity == "feed") %>%
   dplyr::select(Environment, Habitat, Replicate, code, functional, Tide, nmax, Number_bites) %>%
-  
   group_by(Environment, Habitat, Replicate, code, functional, Tide) %>%
   summarize(
-    n_ind = max(nmax),
+    n_ind       = max(nmax),
     total_bites = sum(Number_bites),
-    .groups = "drop"
+    .groups     = "drop"
   ) %>%
-  
   # Join with presence - keeps only species that were present
   right_join(present_species, by = c("Environment", "Habitat", "Replicate", "code", "functional", "Tide")) %>%
-  
   # Fill zeros for species present but not feeding
   mutate(
-    n_ind = replace_na(n_ind, 0),
+    n_ind       = replace_na(n_ind, 0),
     total_bites = replace_na(total_bites, 0),
-    bite_rate = if_else(n_ind > 0, (total_bites / n_ind) / 10, 0)
+    bite_rate   = if_else(n_ind > 0, (total_bites / n_ind) / 10, 0)
   ) %>%
-  select(-present)
+  dplyr::select(-present)
 
 # Aggregate to functional groups
 feed <- species_bite_rates %>%
   group_by(Environment, Habitat, Replicate, functional, Tide) %>%
   summarize(
-    n_ind = sum(n_ind),
+    n_ind       = sum(n_ind),
     total_bites = sum(total_bites),
-    bite_rate = if_else(n_ind > 0, (total_bites / n_ind) / 10, 0),
-    .groups = "drop"
-  )
+    bite_rate   = if_else(n_ind > 0, (total_bites / n_ind) / 10, 0),
+    .groups     = "drop"
+  ) %>%
+  # Unique site ID (Replicate = filming block, repeats across Environment x Habitat)
+  mutate(Site = interaction(Environment, Habitat, Replicate, drop = TRUE))
 
+# ============================================================
+# Tweedie GLMM: per-capita bite rate
+# ============================================================
 feed_model <- glmmTMB(
-  bite_rate ~ Environment * functional * Tide + (1|Habitat),
-  data = feed,
-  family = tweedie(link = "log")
+  bite_rate ~ Environment * functional * Tide + (1|Habitat) + (1|Site),
+  family = glmmTMB::tweedie(link = "log"),
+  data   = feed
 )
 
 # ============================================================
-# Model assumption checks 
-# Tweedie GLMM: continuous, non-negative, zero-inflated rate data
+# Model assumption checks
 # ============================================================
 feed_sim <- simulateResiduals(feed_model)
-plot(feed_sim)                 # OK
-testDispersion(feed_sim)       # OK
-testZeroInflation(feed_sim)    # OK
-testUniformity(feed_sim)       # OK
-check_singularity(feed_model)  # OK
+plot(feed_sim)                   # OK
+testDispersion(feed_sim)         # OK (p = 0.65)
+testZeroInflation(feed_sim)      # OK (p = 0.64)
+testUniformity(feed_sim)         # OK (p = 0.95)
+check_singularity(feed_model)    # FALSE
 
+# ============================================================
 # Per-tide SGD vs Ambient contrasts
+# ============================================================
 sgd_emmeans_feed <- emmeans(feed_model, ~ Environment | Tide + functional,
                             type = "response")
 sgd_contrasts_feed <- pairs(sgd_emmeans_feed) %>%
-  summary(infer = TRUE, adjust = "tukey")    
+  summary(infer = TRUE, adjust = "tukey")
 feed_df <- as.data.frame(sgd_contrasts_feed)
 
 table_S6 <- feed_df %>%
   mutate(
-    Group = paste(functional, Tide, sep = " - "),
-    ratio_sgd = 1/ratio,                 # emmeans gives Ambient/SGD -> invert
-    CI_lower  = 1/asymp.UCL,
-    CI_upper  = 1/asymp.LCL,
+    Group           = paste(functional, Tide, sep = " - "),
+    ratio_sgd       = 1 / ratio,                    # emmeans gives Ambient/SGD -> invert
+    CI_lower        = 1 / asymp.UCL,
+    CI_upper        = 1 / asymp.LCL,
     ratio_formatted = sprintf("%.2f", ratio_sgd),
     CI_formatted    = sprintf("[%.2f, %.2f]", CI_lower, CI_upper),
-    SE_formatted    = sprintf("%.3f", SE),
-    z_formatted     = sprintf("%.2f", abs(z.ratio)),
-    p_formatted = case_when(p.value < 0.001 ~ "< 0.001",
-                            TRUE ~ sprintf("%.3f", p.value))
+    z_formatted     = sprintf("%.2f", -z.ratio),    # flip sign because the ratio was inverted
+    p_formatted     = case_when(p.value < 0.001 ~ "< 0.001",
+                                TRUE            ~ sprintf("%.3f", p.value))
   ) %>%
-  select(Group, ratio_formatted, CI_formatted, SE_formatted, z_formatted,
-         df, p_formatted) %>%
+  dplyr::select(Group, ratio_formatted, CI_formatted, z_formatted, p_formatted) %>%
   rename(
-    "Functional Group - Tide" = Group,
-    "Ratio (SGD/Amb)" = ratio_formatted,
-    "95% CI" = CI_formatted,
-    "SE" = SE_formatted,
-    "z" = z_formatted,
-    "df" = df,
-    "P" = p_formatted
+    "Trophic Group - Tide" = Group,
+    "Ratio (SGD/Amb)"      = ratio_formatted,
+    "95% CI"               = CI_formatted,
+    "z"                    = z_formatted,
+    "p"                    = p_formatted
   )
 
-caption_S6 <- paste0(
-"Table S6. SGD effects on feeding rates across functional groups and tidal states.\n",
-"Tweedie GLMM with log link; random effect: Habitat. Ratios = SGD / Ambient feeding rate.\n",
-"Two-sided contrasts, Tukey-adjusted."
-)
-
 table_S6_grob <- tableGrob(table_S6, theme = table_theme, rows = NULL)
-title_S6 <- textGrob(caption_S6, x = 0.5, vjust = 0, y = -0.5,
-                     gp = gpar(fontsize = 9, fontface = "italic"))
-final_S6 <- arrangeGrob(title_S6, table_S6_grob,
-                        heights = unit.c(unit(3, "lines"), unit(1, "null")))
-
-png(here("Outputs", "TableS6_updated.png"), width = 11, height = 8, units = "in", res = 300)
-grid.draw(final_S6)
-dev.off()
-
-grid.draw(final_S6)
-
-
+save_table(table_S6_grob, "TableS6.png")
 ```
 
+### Table S7
 
-#### Table S7
 ```{r TableS7}
 # Estimates + CIs for each cell
 feeding_emmeans_df <- emmeans(my_glmm_gaussian,
@@ -1668,365 +1426,262 @@ feeding_emmeans_df <- emmeans(my_glmm_gaussian,
 
 table_S7 <- feeding_tests %>%
   left_join(
-    feeding_emmeans_df %>% select(Environment, substrate, functional, lower.CL, upper.CL),
+    feeding_emmeans_df %>% dplyr::select(Environment, substrate, functional, lower.CL, upper.CL),
     by = c("Environment", "substrate", "functional")
   ) %>%
   mutate(
-    Group = paste(functional, substrate, sep = " - "),
-    emmean_formatted = sprintf("%.2f", emmean),
-    CI_formatted = sprintf("[%.2f, %.2f]", lower.CL, upper.CL),
-    SE_formatted = sprintf("%.3f", SE),
-    t_formatted = sprintf("%.2f", t.ratio),
-    p_formatted = case_when(
-      p.value < 0.001 ~ "< 0.001",
-      TRUE ~ sprintf("%.3f", p.value)
-    )
+    Group            = paste(functional, substrate, sep = " - "),
+    emmean_formatted = sub("^-0\\.00$", "0.00", sprintf("%.2f", emmean)),
+    CI_formatted     = sprintf("[%.2f, %.2f]", lower.CL, upper.CL),
+    t_formatted      = sprintf("%.2f", t.ratio),
+    df_formatted     = sprintf("%.0f", df),
+    p_formatted      = case_when(p.value < 0.001 ~ "< 0.001",
+                                 TRUE            ~ sprintf("%.3f", p.value))
   ) %>%
-  select(Environment, Group, emmean_formatted, CI_formatted, SE_formatted,
-         t_formatted, df, p_formatted) %>%
+  dplyr::select(Environment, Group, emmean_formatted, CI_formatted,
+         t_formatted, df_formatted, p_formatted) %>%
   arrange(Group, Environment) %>%
   rename(
-    "Environment" = Environment,
-    "Functional Group - Substrate" = Group,
-    "Mean Δ Bites/min" = emmean_formatted,
-    "95% CI" = CI_formatted,
-    "SE" = SE_formatted,
-    "t" = t_formatted,
-    "df" = df,
-    "P" = p_formatted
+    "Environment"               = Environment,
+    "Trophic Group - Substrate" = Group,
+    "Mean Δ Bites/min"          = emmean_formatted,
+    "95% CI"                    = CI_formatted,
+    "t"                         = t_formatted,
+    "df"                        = df_formatted,
+    "p"                         = p_formatted
   )
-
-caption_S7 <- paste0(
-"Table S7. Tidal differences in bite rates (Low − High tide) by functional group and substrate.\n",
-"Gaussian GLMM with environment-specific dispersion; random effects: Habitat, Replicate.\n",
-"Positive values = higher feeding at low tide. Two-sided tests, FDR-adjusted.\n",
-"Colored points in Fig. 3 indicate significant differences from zero."
-)
 
 table_S7_grob <- tableGrob(table_S7, theme = table_theme, rows = NULL)
-title_S7 <- textGrob(caption_S7, x = 0.5, vjust = 0, y = -0.5,
-                     gp = gpar(fontsize = 9, fontface = "italic"))
-final_S7 <- arrangeGrob(title_S7, table_S7_grob,
-                        heights = unit.c(unit(4, "lines"), unit(1, "null")))
-
-png(here("Outputs", "TableS7_updated.png"), width = 12, height = 12, units = "in", res = 300)
-grid.draw(final_S7)
-dev.off()
-
-grid.draw(final_S7)
-
+save_table(table_S7_grob, "TableS7.png")
 ```
 
-# Figure 4
+# Figure 4.
 
-(a) Herbivory rates on Padina boryana across SGD and ambient environments for algae sourced from each environment (Tweedie generalized linear mixed model [GLMM], two-sided tests; Table S8). (b) Algal nitrogen content (%) and (c) δ¹⁵N of P. boryana from ambient and SGD environments (Gamma GLM, two-sided tests; Table S9). Points are individual algal assays (a) or specimens (b,c); symbols show means ± SE and letters indicate significant differences (p < 0.05). Graphic elements created using Canva and Microsoft PowerPoint.
+## Data processing
 
-## Plotting
-
-### Fig. 4, Subplot A
-``` {r Fig4A}
-
-# Calculate algal consumption by subtracting caged (control) from open treatments
-herb_assay <- assay %>% 
-  # Reshape data to have cage and open values in separate columns
-  pivot_wider(names_from = 'cage', values_from = 'diff') %>%
+```{r Fig4A_data}
+# Consumption = open-assay loss minus caged-control loss
+herb_assay <- assay %>%
+  pivot_wider(names_from = "cage", values_from = "diff") %>%
   mutate(
-    consumed = open - cage,  # Calculate consumption
-    # Replace negative values with 0 (accounts for water weight gain)
-    consumed = pmax(0, consumed)
+    consumed = open - cage,
+    consumed = pmax(0, consumed)   # water weight gain set to 0
   ) %>%
-  dplyr::select(-cage, -open)  # Remove intermediate columns
-
-# Calculate summary statistics for herbivory plot
-herb_assay_plot <- herb_assay %>%
-  group_by(environment, source) %>%  # Group by deployment environment and algae source
-  summarize(
-    mean_consumed = mean(consumed, na.rm = TRUE),  # Mean consumption
-    sd_consumed = sd(consumed, na.rm = TRUE),      # Standard deviation
-    n = n(),                                       # Sample size
-    se_consumed = sd_consumed / sqrt(n),           # Standard error
-    .groups = "drop"
-  ) 
-
-# Set dodge width for consistent spacing across plots
-dodge_width <- 0.2
-
-
-# Create plot showing algal consumption based on source and deployment environment
-Fig4A <- ggplot(herb_assay_plot, 
-                aes(x = source, y = mean_consumed, color = environment)) +
-  # Plot raw data points in background
-  geom_jitter(data = herb_assay, 
-              aes(x = source, y = consumed, group = environment, color = environment),
-              alpha = 0.3,  # More transparent for raw data
-              position = position_jitterdodge(dodge.width = 0.2,
-                                              jitter.width = 0.2),
-              size = 2) +
-  # Add mean points
-  geom_point(size = 3,
-             aes(group = environment),
-             position = position_dodge(width = dodge_width)) +
-  # Add error bars
-  geom_errorbar(aes(ymin = mean_consumed - se_consumed,
-                    ymax = mean_consumed + se_consumed,
-                    group = environment),
-                width = 0.05,
-                position = position_dodge(width = dodge_width),
-                alpha = .75) +
-  # Square root transformation for y-axis (common for consumption data)
-  scale_y_continuous(trans = "sqrt") +
-  theme_bw() +
-  theme(legend.position = "right",
-        legend.title = element_blank(),
-        strip.background = element_rect(fill = "white"),
-        axis.title.x = element_blank(),
-        # Consistent text sizing across all elements
-        axis.title = element_text(size = 16),
-        axis.text = element_text(size = 12),
-        legend.text = element_text(size = 14),
-        axis.title.y = element_text(size = 13),
-        strip.text = element_text(size = 14, face = "bold")) +
-  # Different color scheme for herbivory plot
-  scale_color_manual(values = c("SGD" = "darkolivegreen", 
-                                "Ambient" = "steelblue"),
-                     labels = c("Ambient Environment", "SGD Environment")) +
-  labs(y = "Algal loss per assay (g̅ ± SE)") +
-  # Descriptive x-axis labels
-  scale_x_discrete(labels = c("SGD" = "Algae collected from \nSGD conditions",
-                              "ambient" = "Algae collected from \nAmbient conditions"))
-```
-
-### Fig. 4, Subplot B
-```{r Fig4B}
-
-# Calculate means and standard errors for Padina nitrogen content metrics by SGD environment
-padina_mean <- padina %>% 
-  dplyr::select(Environment, percent_N, del15N) %>%  # Select only needed columns
-  group_by(Environment) %>%  # Group by SGD vs Ambient environment
-  summarize(
-    # Percent nitrogen statistics
-    mean_percentN = mean(percent_N),
-    sd_percentN = sd(percent_N),
-    se_percentN = sd_percentN / sqrt(n()),  
-    # Delta 15N isotope statistics
-    mean_delN = mean(del15N),
-    sd_delN = sd(del15N),
-    se_delN = sd_delN / sqrt(n()),
-    .groups = "drop"  
-  )
-
-# Create plot showing algal nitrogen content between SGD and ambient environments
-Fig4B <- ggplot(data = padina, 
-                aes(x = Environment, 
-                    y = percent_N, 
-                    color = Environment)) +
-  # Add individual data points with jitter to show variation
-  geom_jitter(
-    alpha = 0.5,  # Semi-transparent points
-    position = position_jitterdodge(dodge.width = 0.2,
-                                    jitter.width = 0.2),  # Horizontal spread
-    size = 2
-  ) +
-  # Add mean points on top
-  geom_point(data = padina_mean, 
-             aes(x = Environment, 
-                 y = mean_percentN, 
-                 group = Environment), 
-             size = 2.5) +  # Larger size for means
-  # Add error bars (standard error)
-  geom_errorbar(data = padina_mean, 
-                aes(
-                  x = Environment,
-                  y = mean_percentN,
-                  ymin = mean_percentN - se_percentN,
-                  ymax = mean_percentN + se_percentN,
-                ),
-                width = 0.1) +  # Width of error bar caps
-  # Labels and formatting
-  labs(x = "", y = "Algal Nitrogen Content (Mean % ± SE)") +
-  scale_y_continuous(expand = expansion(mult = c(0.05, 0.05))) +  # Add 5% padding
-  theme_bw() +
-  theme(
-    legend.title = element_blank(),  # Remove legend title
-    axis.text.x = element_text(size = 12)  # Increase x-axis text size
-  ) +
-  # Custom colors for SGD vs Ambient
-  scale_color_manual(values = c("SGD Environment" = sgd_color, 
-                                "Ambient Environment" = ambient_color)) +
-  # Custom x-axis labels with italic species names
-  scale_x_discrete(labels = c("SGD Environment" = "SGD *P. boryana*", 
-                              "Ambient Environment" = "Ambient *P. boryana*")) +
-  # Enable markdown formatting for italic text in axis labels
-  theme(axis.text.x = element_markdown())
-
-```
-
-### Fig. 4, Subplot C
-```{r Fig4C}
-
-# Create plot showing nitrogen isotope signatures between environments
-Fig4C <- ggplot(data = padina, 
-                aes(x = Environment, y = del15N, color = Environment)) +
-  # Add individual data points with jitter
-  geom_jitter(
-    alpha = 0.5,
-    position = position_jitterdodge(dodge.width = 0.2,
-                                    jitter.width = 0.2),
-    size = 2
-  ) +
-  # Add mean points
-  geom_point(data = padina_mean, 
-             aes(x = Environment, y = mean_delN, group = Environment), 
-             size = 2.5) +
-  # Add error bars
-  geom_errorbar(data = padina_mean, 
-                aes(
-                  x = Environment,
-                  y = mean_delN,
-                  ymin = mean_delN - se_delN,
-                  ymax = mean_delN + se_delN,
-                ),
-                width = 0.1) +
-  # Labels with mathematical expression for delta notation
-  labs(x = "", y = expression("Algal " *delta^15 * "N (Mean ‰ ± SE)")) +
-  scale_y_continuous(expand = expansion(mult = c(0.05, 0.05))) +
-  theme_bw() +
-  theme(
-    legend.title = element_blank(),
-    axis.text.x = element_text(size = 12)
-  ) +
-  # Apply same color scheme
-  scale_color_manual(
-    values = c("SGD Environment" = sgd_color, 
-               "Ambient Environment" = ambient_color)
-  ) +
-  # Custom x-axis labels with italic species names
-  scale_x_discrete(labels = c("SGD Environment" = "SGD *P. boryana*", 
-                              "Ambient Environment" = "Ambient *P. boryana*")) +
-  theme(axis.text.x = element_markdown())
-
-```
-
-### Fig. 4, Combined Subplots
-``` {r Fig4combined}
-
-# Remove legends from individual plots to avoid duplication
-Fig4C_no_legend <- Fig4C + theme(legend.position = "none")
-Fig4B_no_legend <- Fig4B + theme(legend.position = "none")
-Fig4A_no_legend <- Fig4A + theme(legend.position = "none")
-
-# Extract legend from herbivory plot to use as shared legend
-Fig4_legend <- get_legend(Fig4A + theme(legend.position = "bottom"))
-
-# Create the combined plot without legends
-Fig4_without_legend <- ggarrange(
-  # Panel A: Herbivory assay 
-  ggarrange(Fig4A_no_legend, 
-            labels = "A",  
-            ncol = 1,
-            font.label = list(size = 16, face = "bold")),
-  # Panels B & C: Nutrient content plots (side by side)
-  ggarrange(Fig4B_no_legend, 
-           Fig4C_no_legend,
-            labels = c("B", "C"),
-            ncol = 2,
-            font.label = list(size = 16, face = "bold")),
-  nrow = 2 
-)
-
-
-# Add shared legend to bottom of combined plot
-Fig4 <- ggarrange(
-  Fig4_without_legend,
-  Fig4_legend,
-  ncol = 1,
-  heights = c(1, .1)  # 10% height for legend
-)
-
-
-# Save figure 
-
-ggsave(here("Outputs", "Fig4.png"), 
-       plot = Fig4, 
-       height = 8,
-       width = 9,
-       dpi = 500) 
-
-Fig4
+  dplyr::select(-cage, -open)
 ```
 
 ## Statistical Analyses
 
 ```{r Fig4Stats}
-
 # Fit Tweedie GLMM with log link
 # tweedie_model <- glmmTMB(
 #   consumed ~ source * environment + (1|habitat) + (1|date),
 #   data = herb_assay, family = tweedie(link = "log")
 # )
-# 
+#
 # herb_sim <- simulateResiduals(tweedie_model)
 # testDispersion(herb_sim) #OK
 # testZeroInflation(herb_sim)  #OK
 # testUniformity(herb_sim) #OK
 # check_singularity(tweedie_model) # fail
 
-#VarCorr(tweedie_model)  
+# VarCorr(tweedie_model)
 
 tweedie_model <- glmmTMB(
   consumed ~ source * environment + (1|habitat),   # date dropped
-  data = herb_assay, family = tweedie(link = "log")
+  data = herb_assay, family = glmmTMB::tweedie(link = "log")
 )
 
 herb_sim <- simulateResiduals(tweedie_model)
-testDispersion(herb_sim) #OK
-testZeroInflation(herb_sim)  #OK
-testUniformity(herb_sim) #OK
-check_singularity(tweedie_model) # OK
+testDispersion(herb_sim)           # OK
+testZeroInflation(herb_sim)        # OK
+testUniformity(herb_sim)           # OK
+check_singularity(tweedie_model)   # OK
+
+
 
 # Test Delta 15N differences between SGD and ambient environments
 # δ15N: SGD vs ambient (two-sided)
 p_delN_gamma_model <- glm(del15N ~ Environment, data = padina, family = Gamma(link = "log"))
 
 delN_sim <- simulateResiduals(p_delN_gamma_model)
-testDispersion(delN_sim) #OK
-testUniformity(delN_sim)  #OK
-testOutliers(delN_sim) #OK
+testDispersion(delN_sim)   # OK
+testUniformity(delN_sim)   # OK
+testOutliers(delN_sim)     # OK
+check_singularity(delN_sim)
+
 
 del_contrast <- emmeans(p_delN_gamma_model, ~ Environment, type = "response") %>%
-  pairs()             
+  pairs()
 
 # Percent N: SGD vs ambient
-p_percentN_gamma_model <- glm(percent_N ~ Environment, 
-                              data = padina, 
+p_percentN_gamma_model <- glm(percent_N ~ Environment,
+                              data   = padina,
                               family = Gamma(link = "log"))
 
 percentN_sim <- simulateResiduals(p_percentN_gamma_model)
-testDispersion(percentN_sim) #OK
+testDispersion(percentN_sim)   # OK
 testUniformity(percentN_sim)   # OK
-testOutliers(percentN_sim) # OK
+testOutliers(percentN_sim)     # OK
+check_singularity(percentN_sim)
 
 percentN_contrast <- emmeans(p_percentN_gamma_model, ~ Environment, type = "response") %>%
-  pairs()                     
+  pairs()
+```
 
 
+## Plotting
+
+### Fig. 4 sizing
+
+```{r Fig4Style}
+fig4_base  <- 12                                          # text size
+fig4_label <- list(size = fig4_base + 2, face = "bold")   # panel letters
+```
+
+### Fig. 4, Subplot A 
+
+```{r Fig4A_model}
+# Model-estimated marginal means, back-transformed to grams
+emm_4A <- emmeans(tweedie_model, ~ source * environment, type = "response") %>%
+  as.data.frame()
+
+dodge <- position_dodge(width = 0.4)
+
+Fig4A <- ggplot(herb_assay, aes(x = source, colour = environment)) +
+  # raw assays
+  geom_point(aes(y = consumed), alpha = 0.35, size = 2,
+             position = position_jitterdodge(jitter.width = 0.1, jitter.height = 0,
+                                             dodge.width = 0.4, seed = 123)) +
+  # model ± SE
+  geom_errorbar(data = emm_4A, aes(ymin = pmax(response - SE, 0), ymax = response + SE),
+                position = dodge, width = 0.1, linewidth = 0.5, show.legend = FALSE) +
+  # model means
+  geom_point(data = emm_4A, aes(y = response), position = dodge, size = 2.6) +
+  scale_y_continuous(transform = "sqrt", breaks = c(0, 0.25, 0.5, 1, 2, 4, 6)) +
+  scale_x_discrete(limits = c("ambient", "SGD"),
+                   labels = c(ambient = "Algae collected from\nambient conditions",
+                              SGD     = "Algae collected from\nSGD conditions")) +
+  scale_colour_manual(values = c(Ambient = ambient_color, SGD = sgd_color),
+                      labels = c(Ambient = "Ambient environment", SGD = "SGD environment")) +
+  labs(x = NULL, y = "Estimated algal loss\nper assay (g ± SE)") +
+  theme_meps(base = fig4_base) +
+  theme(
+    legend.position    = "right",
+    panel.grid.minor   = element_blank(),
+    panel.grid.major.x = element_blank()
+  )
+
+Fig4A
+
+
+```
+
+### Fig. 4, Subplot B
+
+```{r Fig4B_model}
+emm_4B <- emmeans(p_percentN_gamma_model, ~ Environment, type = "response") %>%
+  as.data.frame()
+
+Fig4B <- ggplot(padina, aes(x = Environment, colour = Environment)) +
+  # raw specimens
+  geom_point(aes(y = percent_N), alpha = 0.35, size = 2,
+             position = position_jitter(width = 0.08, height = 0, seed = 123)) +
+  # model ± SE
+  geom_errorbar(data = emm_4B, aes(ymin = response - SE, ymax = response + SE),
+                width = 0.1, linewidth = 0.5, show.legend = FALSE) +
+  # model means
+  geom_point(data = emm_4B, aes(y = response), size = 2.6) +
+  scale_colour_manual(values = c("SGD Environment"     = sgd_color,
+                                 "Ambient Environment" = ambient_color),
+                      guide = "none") +
+  scale_x_discrete(labels = c("Ambient Environment" = "Ambient<br>*P. boryana*",
+                              "SGD Environment"     = "SGD<br>*P. boryana*")) +
+  scale_y_continuous(expand = expansion(mult = 0.05)) +
+  labs(x = NULL, y = "Estimated nitrogen\ncontent (% ± SE)") +
+  theme_meps(base = fig4_base) +
+  theme(
+    panel.grid.minor   = element_blank(),
+    panel.grid.major.x = element_blank(),
+    axis.text.x        = element_markdown(colour = "black")
+  )
+
+Fig4B
+```
+
+### Fig. 4, Subplot C
+
+```{r Fig4C_model}
+emm_4C <- emmeans(p_delN_gamma_model, ~ Environment, type = "response") %>%
+  as.data.frame()
+
+Fig4C <- ggplot(padina, aes(x = Environment, colour = Environment)) +
+  # raw specimens
+  geom_point(aes(y = del15N), alpha = 0.35, size = 2,
+             position = position_jitter(width = 0.08, height = 0, seed = 123)) +
+  # model ± SE
+  geom_errorbar(data = emm_4C, aes(ymin = response - SE, ymax = response + SE),
+                width = 0.1, linewidth = 0.5, show.legend = FALSE) +
+  # model means
+  geom_point(data = emm_4C, aes(y = response), size = 2.6) +
+  scale_colour_manual(values = c("SGD Environment"     = sgd_color,
+                                 "Ambient Environment" = ambient_color),
+                      guide = "none") +
+  scale_x_discrete(labels = c("Ambient Environment" = "Ambient<br>*P. boryana*",
+                              "SGD Environment"     = "SGD<br>*P. boryana*")) +
+  scale_y_continuous(expand = expansion(mult = 0.05)) +
+  labs(x = NULL, y = expression(atop("Estimated " * delta^15 * "N", "(‰ ± SE)"))) +
+  theme_meps(base = fig4_base) +
+  theme(
+    panel.grid.minor   = element_blank(),
+    panel.grid.major.x = element_blank(),
+    axis.text.x        = element_markdown(colour = "black")
+  )
+
+Fig4C
+```
+
+### Fig. 4, Combined Subplots
+
+```{r Fig4combined}
+# Shared environment legend from panel A
+Fig4_legend <- get_legend(Fig4A + theme(legend.position = "bottom"))
+
+Fig4_without_legend <- ggarrange(
+  # Panel A: herbivory assay
+  ggarrange(Fig4A + theme(legend.position = "none"),
+            labels = "A", font.label = fig4_label),
+  # Panels B & C: nutrient content
+  ggarrange(Fig4B, Fig4C,
+            labels = c("B", "C"), ncol = 2,
+            font.label = fig4_label),
+  nrow = 2
+)
+
+# Add shared legend underneath
+Fig4 <- ggarrange(Fig4_without_legend, Fig4_legend,
+                  ncol = 1, heights = c(1, 0.08))
+
+ggsave(here("Outputs", "Fig4.png"), plot = Fig4,
+       width = 169, height = 150, units = "mm",
+       dpi = 600, bg = "white")
 ```
 
 ## Supplemental Materials
 
 ### Table S8
-```{r Table S8}
 
-# extract coefficients table from model summary
+```{r TableS8}
+# Extract coefficients table from model summary
 herbivory_summary <- summary(tweedie_model)
-model_coeffs <- herbivory_summary$coefficients$cond
+model_coeffs      <- herbivory_summary$coefficients$cond
 
 model_coeffs_df <- data.frame(
-  Term = rownames(model_coeffs),
-  Estimate = model_coeffs[, 1],
-  SE = model_coeffs[, 2],
-  z_value = model_coeffs[, 3],
-  p_value = model_coeffs[, 4],
+  Term      = rownames(model_coeffs),
+  Estimate  = model_coeffs[, 1],
+  SE        = model_coeffs[, 2],
+  z_value   = model_coeffs[, 3],
+  p_value   = model_coeffs[, 4],
   row.names = NULL
 ) %>%
   mutate(
@@ -2037,103 +1692,104 @@ model_coeffs_df <- data.frame(
 table_S8 <- model_coeffs_df %>%
   mutate(
     Estimate_formatted = sprintf("%.3f", Estimate),
-    CI_formatted = sprintf("[%.3f, %.3f]", CI_lower, CI_upper),
-    SE_formatted = sprintf("%.3f", SE),
-    z_formatted = sprintf("%.2f", z_value),
-    p_formatted = case_when(
-      p_value < 0.001 ~ "< 0.001",
-      TRUE ~ sprintf("%.3f", p_value)
-    )
+    CI_formatted       = sprintf("[%.3f, %.3f]", CI_lower, CI_upper),
+    z_formatted        = sprintf("%.2f", z_value),
+    p_formatted        = case_when(p_value < 0.001 ~ "< 0.001",
+                                   TRUE            ~ sprintf("%.3f", p_value))
   ) %>%
-  select(Term, Estimate_formatted, CI_formatted, SE_formatted, z_formatted, p_formatted) %>%
+  dplyr::select(Term, Estimate_formatted, CI_formatted, z_formatted, p_formatted) %>%
   rename(
-    "Model Term" = Term,
+    "Model Term"     = Term,
     "Estimate (log)" = Estimate_formatted,
-    "95% CI" = CI_formatted,
-    "SE" = SE_formatted,
-    "z" = z_formatted,
-    "P" = p_formatted
+    "95% CI"         = CI_formatted,
+    "z"              = z_formatted,
+    "p"              = p_formatted
   )
 
-caption_S8 <- paste0(
-  "Table S8. Herbivory model coefficients.\n",
-  "Tweedie GLMM with log link; random effect: habitat.\n",
-  "Model: consumed ~ source × environment + (1|habitat). Two-sided Wald tests."
-)
-
 table_S8_grob <- tableGrob(table_S8, theme = table_theme, rows = NULL)
-title_S8 <- textGrob(caption_S8, x = 0.5, vjust = 0, y = -0.5,
-                     gp = gpar(fontsize = 9, fontface = "italic"))
-final_S8 <- arrangeGrob(title_S8, table_S8_grob,
-                        heights = unit.c(unit(4, "lines"), unit(1, "null")))
-
-png(here("Outputs", "TableS8_updated.png"), width = 10, height = 5, units = "in", res = 300)
-grid.draw(final_S8)
-dev.off()
-
-grid.draw(final_S8)
-
+save_table(table_S8_grob, "TableS8.png")
 ```
 
 ### Table S9
-```{r TableS9}
+```{r Tables9}
+main_src <- emmeans(tweedie_model, ~ source) %>%
+  pairs(reverse = TRUE) %>%                     # SGD / ambient
+  summary(infer = TRUE, type = "response") %>%
+  as.data.frame() %>%
+  mutate(Effect = "Algal source (averaged across environments)")
+
+main_env <- emmeans(tweedie_model, ~ environment) %>%
+  pairs(reverse = TRUE) %>%                     # SGD / Ambient
+  summary(infer = TRUE, type = "response") %>%
+  as.data.frame() %>%
+  mutate(Effect = "Deployment environment (averaged across sources)")
+
+table_S9 <- bind_rows(main_src, main_env) %>%
+  mutate(
+    ratio_formatted = sprintf("%.2f", ratio),
+    CI_formatted    = sprintf("[%.2f, %.2f]", asymp.LCL, asymp.UCL),
+    z_formatted     = sprintf("%.2f", z.ratio),
+    p_formatted     = case_when(p.value < 0.001 ~ "< 0.001",
+                                TRUE            ~ sprintf("%.3f", p.value))
+  ) %>%
+  dplyr::select(Effect, ratio_formatted, CI_formatted, z_formatted, p_formatted) %>%
+  rename("Effect"          = Effect,
+         "Ratio (SGD/Amb)" = ratio_formatted,
+         "95% CI"          = CI_formatted,
+         "z"               = z_formatted,
+         "p"               = p_formatted)
+
+save_table(tableGrob(table_S9, theme = table_theme, rows = NULL), "TableS9.png")
+```
+
+### Table S10
+
+```{r TableS10}
 del_contrast <- emmeans(p_delN_gamma_model, ~ Environment, type = "response") %>%
-  pairs() %>% summary(infer = TRUE)          # two-sided, CIs + p in one call
+  pairs() %>%
+  summary(infer = TRUE)   # two-sided, CIs + p in one call
 
 percentN_contrast <- emmeans(p_percentN_gamma_model, ~ Environment, type = "response") %>%
-  pairs() %>% summary(infer = TRUE)
+  pairs() %>%
+  summary(infer = TRUE)
 
-del_df  <- as.data.frame(del_contrast)  %>% mutate(Parameter = "δ15N (‰)")
+del_df  <- as.data.frame(del_contrast)      %>% mutate(Parameter = "δ15N (‰)")
 pctN_df <- as.data.frame(percentN_contrast) %>% mutate(Parameter = "Nitrogen (%)")
 
 del_resid_df  <- df.residual(p_delN_gamma_model)
 pctN_resid_df <- df.residual(p_percentN_gamma_model)
 
-table_S9 <- bind_rows(del_df, pctN_df) %>%
+table_S10 <- bind_rows(del_df, pctN_df) %>%
   mutate(
-    ratio_sgd = 1/ratio,                 # invert to SGD/Ambient
-    CI_lower  = 1/upper.CL,
-    CI_upper  = 1/lower.CL,
+    ratio_sgd        = 1 / ratio,                   # invert to SGD/Ambient
+    CI_lower         = 1 / upper.CL,
+    CI_upper         = 1 / lower.CL,
     percent_increase = sprintf("%.0f%%", (ratio_sgd - 1) * 100),
     ratio_formatted  = sprintf("%.3f", ratio_sgd),
     CI_formatted     = sprintf("[%.3f, %.3f]", CI_lower, CI_upper),
-    SE_formatted     = sprintf("%.3f", SE),
-    t_formatted      = sprintf("%.2f", abs(t.ratio)),
-    df_value = ifelse(Parameter == "δ15N (‰)", del_resid_df, pctN_resid_df),
-    p_formatted = case_when(p.value < 0.001 ~ "< 0.001",
-                            TRUE ~ sprintf("%.3f", p.value))
+    t_formatted      = sprintf("%.2f", -t.ratio),   # flip sign because the ratio was inverted
+    df_formatted     = sprintf("%.0f", ifelse(Parameter == "δ15N (‰)", del_resid_df, pctN_resid_df)),
+    p_formatted      = case_when(p.value < 0.001 ~ "< 0.001",
+                                 TRUE            ~ sprintf("%.3f", p.value))
   ) %>%
-  select(Parameter, ratio_formatted, CI_formatted, percent_increase, SE_formatted,
-         t_formatted, df_value, p_formatted) %>%
+  dplyr::select(Parameter, ratio_formatted, CI_formatted, percent_increase,
+         t_formatted, df_formatted, p_formatted) %>%
   rename(
-    "Parameter" = Parameter, "Ratio (SGD/Amb)" = ratio_formatted,
-    "95% CI" = CI_formatted, "SGD Increase" = percent_increase,
-    "SE" = SE_formatted, "t" = t_formatted, "df" = df_value, "P" = p_formatted
+    "Parameter"       = Parameter,
+    "Ratio (SGD/Amb)" = ratio_formatted,
+    "95% CI"          = CI_formatted,
+    "SGD Increase"    = percent_increase,
+    "t"               = t_formatted,
+    "df"              = df_formatted,
+    "p"               = p_formatted
   )
 
-caption_S9 <- paste0(
-  "Table S9. Padina boryana nutrient content: SGD vs Ambient environments.\n",
-  "Gamma GLMs with log link. Two-sided tests; n = 5 per environment.\n",
-  "Ratios > 1 indicate higher values in SGD. Letters in Fig. 4B-C correspond to these contrasts."
-)
-
-table_S9_grob <- tableGrob(table_S9, theme = table_theme, rows = NULL)
-title_S9 <- textGrob(caption_S9, x = 0.5, vjust = 0, y = -0.5, 
-                     gp = gpar(fontsize = 9, fontface = "italic"))
-final_S9 <- arrangeGrob(title_S9, table_S9_grob, 
-                        heights = unit.c(unit(4, "lines"), unit(1, "null")))
-png(here("Outputs", "TableS9_updated.png"), width = 10, height = 5, units = "in", res = 300)
-grid.draw(final_S9)
-dev.off()
-grid.draw(final_S9)
+table_S10_grob <- tableGrob(table_S10, theme = table_theme, rows = NULL)
+save_table(table_S10_grob, "TableS10.png")
 ```
-
-
 
 # References
 
 ```{r cite}
 cite_packages()
 ```
-
-
